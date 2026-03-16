@@ -6,6 +6,7 @@ const router = express.Router();
 const ALLOWED_SORTS = [
   'api_well_number', 'well_name', 'operator_name', 'status_code',
   'type_code', 'total_measured_depth', 'water_depth', 'spud_date',
+  'area_block', 'platform_name',
 ];
 
 // GET /api/wells — paginated list with filters
@@ -68,10 +69,15 @@ router.get('/',
              w.total_measured_depth, w.true_vertical_depth, w.water_depth,
              w.spud_date, w.completion_date,
              w.surface_latitude, w.surface_longitude,
-             w.area_block, w.bottom_lease_number
+             w.area_block, w.bottom_lease_number,
+             ps.structure_name AS platform_name
       FROM wells w
       LEFT JOIN companies c ON w.operator_num = c.company_num
+      LEFT JOIN platforms p ON w.bottom_lease_number = p.lease_number
+      LEFT JOIN platform_structures ps ON p.complex_id = ps.complex_id
+        AND ps.structure_number = (SELECT MIN(s2.structure_number) FROM platform_structures s2 WHERE s2.complex_id = p.complex_id)
       WHERE ${where}
+      GROUP BY w.api_well_number
       ORDER BY ${orderBy}
       LIMIT @limit OFFSET @offset
     `).all({ ...params, limit, offset });

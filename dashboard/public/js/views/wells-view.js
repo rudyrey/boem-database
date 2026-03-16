@@ -71,6 +71,7 @@ export async function initWellsView(container, params = {}) {
 
   const columns = [
     { key: 'api_well_number', label: 'API Number', width: '140px', className: 'cell-mono' },
+    { key: 'platform_name', label: 'Facility', width: '120px', format: (v) => v || '—' },
     { key: 'area_block', label: 'Area/Block', width: '120px' },
     { key: 'well_name', label: 'Well Name', width: '120px' },
     { key: 'operator_name', label: 'Operator' },
@@ -142,6 +143,7 @@ export async function initWellsView(container, params = {}) {
         { key: 'type_code', label: 'Type' },
         { key: 'total_measured_depth', label: 'Measured Depth (ft)' },
         { key: 'water_depth', label: 'Water Depth (ft)' },
+        { key: 'platform_name', label: 'Facility' },
         { key: 'area_block', label: 'Area/Block' },
         { key: 'spud_date', label: 'Spud Date' },
       ];
