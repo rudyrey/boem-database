@@ -1,0 +1,69 @@
+:root {
+  /* Colors */
+  --color-primary: #1a5276;
+  --color-primary-light: #2980b9;
+  --color-primary-dark: #0e2f44;
+  --color-accent: #e67e22;
+  --color-accent-light: #f0a04b;
+  --color-success: #27ae60;
+  --color-danger: #c0392b;
+  --color-warning: #f39c12;
+  --color-info: #3498db;
+
+  --color-bg: #f0f2f5;
+  --color-surface: #ffffff;
+  --color-text: #2c3e50;
+  --color-text-muted: #7f8c8d;
+  --color-text-light: #bdc3c7;
+  --color-border: #dcdde1;
+  --color-border-light: #ecf0f1;
+
+  /* Map feature colors */
+  --color-platform-active: #e67e22;
+  --color-platform-removed: #95a5a6;
+  --color-well-producing: #27ae60;
+  --color-well-abandoned: #c0392b;
+  --color-well-drilling: #3498db;
+  --color-well-other: #f1c40f;
+  --color-lease-producing: rgba(39, 174, 96, 0.3);
+  --color-lease-expired: rgba(149, 165, 166, 0.3);
+  --color-pipeline: #2980b9;
+  --color-pipeline-oil: #2c3e50;
+  --color-pipeline-gas: #e74c3c;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* Typography */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-md: 0.875rem;
+  --font-size-lg: 1rem;
+  --font-size-xl: 1.125rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 2rem;
+
+  /* Layout */
+  --header-height: 52px;
+  --sidebar-width: 56px;
+  --sidebar-width-expanded: 200px;
+  --detail-panel-width: 400px;
+  --row-height: 36px;
+  --border-radius: 6px;
+  --border-radius-lg: 10px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.12);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+}

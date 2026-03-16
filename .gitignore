@@ -1,0 +1,7 @@
+node_modules/
+raw_data/
+.DS_Store
+*.db
+*.db-shm
+*.db-wal
+.claude/
