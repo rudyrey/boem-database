@@ -4,7 +4,7 @@
   "description": "Full-stack dashboard for BOEM Gulf of Mexico data",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node setup-db.js && node server.js",
     "dev": "node --watch server.js"
   },
   "dependencies": {
