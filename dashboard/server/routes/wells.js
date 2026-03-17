@@ -14,7 +14,7 @@ router.get('/',
   pagination(ALLOWED_SORTS),
   (req, res) => {
     const { page, limit, offset, sort, order } = req.pagination;
-    const { status_code, type_code, operator_num, spud_from, spud_to,
+    const { status_code, type_code, operator_num, area_block, spud_from, spud_to,
             min_depth, max_depth, min_tvd, max_tvd,
             min_water_depth, max_water_depth, search } = req.query;
 
@@ -36,6 +36,11 @@ router.get('/',
     } else if (typeCodes.length > 0) {
       const ph = typeCodes.map((c, i) => { params[`tc_${i}`] = c; return `@tc_${i}`; }).join(',');
       where += ` AND w.type_code IN (${ph})`;
+    }
+    const areaBlocks = area_block ? area_block.split(',').filter(Boolean) : [];
+    if (areaBlocks.length > 0) {
+      const ph = areaBlocks.map((v, i) => { params[`ab_${i}`] = v; return `@ab_${i}`; }).join(',');
+      where += ` AND w.area_block IN (${ph})`;
     }
     if (operator_num) { where += ' AND w.operator_num = @operator_num'; params.operator_num = operator_num; }
     if (spud_from) { where += ' AND w.spud_date >= @spud_from'; params.spud_from = spud_from; }
