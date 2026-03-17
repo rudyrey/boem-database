@@ -77,6 +77,7 @@ function buildCache() {
     pipelineStatus: db.prepare('SELECT DISTINCT status_code FROM pipelines WHERE status_code IS NOT NULL ORDER BY status_code').all().map(r => r.status_code),
     pipelineProduct: db.prepare('SELECT DISTINCT product_code FROM pipelines WHERE product_code IS NOT NULL ORDER BY product_code').all().map(r => r.product_code),
     areaCodes: db.prepare('SELECT DISTINCT area_code FROM leases WHERE area_code IS NOT NULL ORDER BY area_code').all().map(r => r.area_code),
+    wellAreaBlocks: db.prepare('SELECT DISTINCT area_block FROM wells WHERE area_block IS NOT NULL ORDER BY area_block').all().map(r => r.area_block),
   };
 
   console.log(`  Cache built in ${Date.now() - t0}ms`);
