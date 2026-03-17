@@ -3,6 +3,7 @@ import { formatNumber, formatDate, escapeHtml, formatDepth } from '../core/utils
 import { DataTable } from '../components/data-table.js';
 import { MiniMap } from '../components/mini-map.js';
 import { debounce } from '../core/utils.js';
+import { initSplitResizer } from '../components/split-resizer.js';
 
 export async function initPipelinesView(container, params = {}) {
   const stats = await getStats();
@@ -126,8 +127,10 @@ export async function initPipelinesView(container, params = {}) {
     return `<div class="kv-row"><span class="kv-key">${key}</span><span class="kv-value">${val ?? '—'}</span></div>`;
   }
 
+  const resizer = initSplitResizer(container.querySelector('.split-layout'));
+
   if (params.id) showDetail(params.id);
   table.load();
 
-  return () => { table.destroy(); if (detailMap) detailMap.destroy(); };
+  return () => { table.destroy(); if (resizer) resizer.destroy(); if (detailMap) detailMap.destroy(); };
 }

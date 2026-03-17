@@ -5,6 +5,7 @@ import { ChartPanel, productionChartConfig } from '../components/chart-panel.js'
 import { MiniMap } from '../components/mini-map.js';
 import { MultiSelect } from '../components/multi-select.js';
 import { debounce } from '../core/utils.js';
+import { initSplitResizer } from '../components/split-resizer.js';
 
 export async function initWellsView(container, params = {}) {
   const stats = await getStats();
@@ -79,7 +80,9 @@ export async function initWellsView(container, params = {}) {
     { key: 'status_code', label: 'Status', width: '90px', format: (v) => wellStatusBadge(v) },
     { key: 'type_code', label: 'Type', width: '80px', format: (v) => typeLabels[v] || v || '—' },
     { key: 'total_measured_depth', label: 'MD', width: '80px', className: 'cell-number', format: (v) => formatDepth(v) },
+    { key: 'true_vertical_depth', label: 'TVD', width: '80px', className: 'cell-number', format: (v) => formatDepth(v) },
     { key: 'water_depth', label: 'Water', width: '70px', className: 'cell-number', format: (v) => formatDepth(v) },
+    { key: 'cum_oil', label: 'Cum Oil', width: '100px', className: 'cell-number', format: (v) => v != null ? formatNumber(Math.round(v)) : '—' },
     { key: 'spud_date', label: 'Spud Date', width: '100px', format: (v) => formatDate(v) },
   ];
 
@@ -144,7 +147,9 @@ export async function initWellsView(container, params = {}) {
         { key: 'status_code', label: 'Status' },
         { key: 'type_code', label: 'Type' },
         { key: 'total_measured_depth', label: 'Measured Depth (ft)' },
+        { key: 'true_vertical_depth', label: 'True Vertical Depth (ft)' },
         { key: 'water_depth', label: 'Water Depth (ft)' },
+        { key: 'cum_oil', label: 'Cum Oil (bbl)' },
         { key: 'platform_name', label: 'Facility' },
         { key: 'area_block', label: 'Area/Block' },
         { key: 'spud_date', label: 'Spud Date' },
@@ -269,10 +274,13 @@ export async function initWellsView(container, params = {}) {
     showWellDetail(params.id);
   }
 
+  const resizer = initSplitResizer(container.querySelector('.split-layout'));
+
   table.load();
 
   return () => {
     table.destroy();
+    if (resizer) resizer.destroy();
     statusMS.destroy();
     typeMS.destroy();
     if (detailChart) detailChart.destroy();

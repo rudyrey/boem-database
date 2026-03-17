@@ -5,8 +5,8 @@ const router = express.Router();
 
 const ALLOWED_SORTS = [
   'api_well_number', 'well_name', 'operator_name', 'status_code',
-  'type_code', 'total_measured_depth', 'water_depth', 'spud_date',
-  'area_block', 'platform_name',
+  'type_code', 'total_measured_depth', 'true_vertical_depth', 'water_depth', 'spud_date',
+  'area_block', 'platform_name', 'cum_oil',
 ];
 
 // GET /api/wells — paginated list with filters
@@ -74,7 +74,8 @@ router.get('/',
              w.spud_date, w.completion_date,
              w.surface_latitude, w.surface_longitude,
              w.area_block, w.bottom_lease_number,
-             ps.structure_name AS platform_name
+             ps.structure_name AS platform_name,
+             (SELECT SUM(p2.oil_volume) FROM production p2 WHERE p2.api_well_number = w.api_well_number) AS cum_oil
       FROM wells w
       LEFT JOIN companies c ON w.operator_num = c.company_num
       LEFT JOIN platforms p ON w.bottom_lease_number = p.lease_number

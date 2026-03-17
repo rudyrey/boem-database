@@ -73,33 +73,58 @@ router.get('/:id/wells',
 );
 
 // GET /api/companies/:id/leases
-router.get('/:id/leases', (req, res) => {
-  const rows = db.prepare(`
-    SELECT DISTINCT l.lease_number, l.area_code, l.block_number,
-           l.lease_status, l.effective_date, lo.assignment_pct
-    FROM lease_owners lo
-    JOIN leases l ON lo.lease_number = l.lease_number
-    WHERE lo.company_num = @id
-    ORDER BY l.lease_number
-  `).all({ id: req.params.id });
+router.get('/:id/leases',
+  pagination(['lease_number', 'area_code', 'block_number', 'lease_status']),
+  (req, res) => {
+    const { page, limit, offset, sort, order } = req.pagination;
+    const orderBy = sort ? `${sort} ${order}` : 'l.lease_number ASC';
 
-  res.json({ data: rows });
-});
+    const total = db.prepare(`
+      SELECT COUNT(DISTINCT l.lease_number) as c
+      FROM lease_owners lo
+      JOIN leases l ON lo.lease_number = l.lease_number
+      WHERE lo.company_num = @id
+    `).get({ id: req.params.id }).c;
+
+    const rows = db.prepare(`
+      SELECT DISTINCT l.lease_number, l.area_code, l.block_number,
+             l.lease_status, l.effective_date, lo.assignment_pct
+      FROM lease_owners lo
+      JOIN leases l ON lo.lease_number = l.lease_number
+      WHERE lo.company_num = @id
+      ORDER BY ${orderBy}
+      LIMIT @limit OFFSET @offset
+    `).all({ id: req.params.id, limit, offset });
+
+    res.json(paginatedResponse(rows, total, { page, limit }));
+  }
+);
 
 // GET /api/companies/:id/platforms
-router.get('/:id/platforms', (req, res) => {
-  const rows = db.prepare(`
-    SELECT p.complex_id, p.area_code, p.block_number,
-           p.water_depth, p.oil_producing, p.gas_producing,
-           ps.structure_name, ps.structure_type, ps.install_date
-    FROM platforms p
-    LEFT JOIN platform_structures ps ON p.complex_id = ps.complex_id
-      AND ps.structure_number = (SELECT MIN(s2.structure_number) FROM platform_structures s2 WHERE s2.complex_id = p.complex_id)
-    WHERE p.company_num = @id
-    ORDER BY p.complex_id
-  `).all({ id: req.params.id });
+router.get('/:id/platforms',
+  pagination(['complex_id', 'area_code', 'block_number']),
+  (req, res) => {
+    const { page, limit, offset, sort, order } = req.pagination;
+    const orderBy = sort ? `${sort} ${order}` : 'p.complex_id ASC';
 
-  res.json({ data: rows });
-});
+    const total = db.prepare(
+      'SELECT COUNT(*) as c FROM platforms WHERE company_num = @id'
+    ).get({ id: req.params.id }).c;
+
+    const rows = db.prepare(`
+      SELECT p.complex_id, p.area_code, p.block_number,
+             p.water_depth, p.oil_producing, p.gas_producing,
+             ps.structure_name, ps.structure_type, ps.install_date
+      FROM platforms p
+      LEFT JOIN platform_structures ps ON p.complex_id = ps.complex_id
+        AND ps.structure_number = (SELECT MIN(s2.structure_number) FROM platform_structures s2 WHERE s2.complex_id = p.complex_id)
+      WHERE p.company_num = @id
+      ORDER BY ${orderBy}
+      LIMIT @limit OFFSET @offset
+    `).all({ id: req.params.id, limit, offset });
+
+    res.json(paginatedResponse(rows, total, { page, limit }));
+  }
+);
 
 module.exports = router;
