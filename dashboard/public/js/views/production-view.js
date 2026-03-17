@@ -145,12 +145,12 @@ export async function initProductionView(container) {
   const opFilterAC = setupAutocomplete('prod-op-filter', 'prod-op-filter-list', 'operator', (sel) => {
     selectedOpFilter = sel;
     loadTopProducers();
+    reloadMainCharts();
   });
 
   // Initial load
-  loadAnnualChart(stats.annualSummary);
+  loadAllCharts();
   loadTopProducers();
-  loadSummaryChart(stats.annualSummary);
 
   // ——— View-by change ———
   const viewByEl = document.getElementById('prod-view-by');
@@ -163,7 +163,7 @@ export async function initProductionView(container) {
     if (val === 'all') {
       entityGroup.style.display = 'none';
       selectedEntity = { code: null, label: null };
-      loadAnnualChart(stats.annualSummary);
+      loadAllCharts();
     } else {
       entityGroup.style.display = '';
       entityInput.value = '';
@@ -195,15 +195,16 @@ export async function initProductionView(container) {
     }
   });
 
-  // ——— Filter changes trigger top-producers reload ———
+  // ——— Filter changes trigger all charts reload ———
   document.getElementById('prod-top-metric').addEventListener('change', loadTopProducers);
-  document.getElementById('prod-year-from').addEventListener('change', () => { loadTopProducers(); reloadEntityIfNeeded(); });
-  document.getElementById('prod-year-to').addEventListener('change', () => { loadTopProducers(); reloadEntityIfNeeded(); });
-  document.getElementById('prod-area').addEventListener('input', debounce(() => { loadTopProducers(); reloadEntityIfNeeded(); }, 400));
+  document.getElementById('prod-year-from').addEventListener('change', () => { loadTopProducers(); reloadMainCharts(); reloadEntityIfNeeded(); });
+  document.getElementById('prod-year-to').addEventListener('change', () => { loadTopProducers(); reloadMainCharts(); reloadEntityIfNeeded(); });
+  document.getElementById('prod-area').addEventListener('input', debounce(() => { loadTopProducers(); reloadMainCharts(); reloadEntityIfNeeded(); }, 400));
   document.getElementById('prod-op-filter').addEventListener('keydown', (e) => {
     if (e.key === 'Backspace' && document.getElementById('prod-op-filter').value === '') {
       selectedOpFilter = { code: null, label: null };
       loadTopProducers();
+      reloadMainCharts();
     }
   });
 
@@ -211,6 +212,21 @@ export async function initProductionView(container) {
     if (selectedEntity.code && document.getElementById('prod-view-by').value !== 'all') {
       loadEntityChart();
     }
+  }
+
+  function reloadMainCharts() {
+    if (document.getElementById('prod-view-by').value === 'all') {
+      loadAllCharts();
+    }
+  }
+
+  async function loadAllCharts() {
+    const params = getFilterParams();
+    try {
+      const res = await apiGet('/production/annual-summary', params);
+      loadAnnualChart(res.data);
+      loadSummaryChart(res.data);
+    } catch (e) { console.error(e); }
   }
 
   // ——— Gather current filter params ———

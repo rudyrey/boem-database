@@ -75,9 +75,29 @@ function buildProductionFilters(query, exclude = []) {
   return { where, params };
 }
 
-// GET /api/production/annual-summary — cached
+// GET /api/production/annual-summary — cached when no filters, otherwise live query
 router.get('/annual-summary', (req, res) => {
-  res.json({ data: cache.annualSummary });
+  const hasFilters = req.query.date_from || req.query.date_to || req.query.area_block || req.query.operator_num;
+  if (!hasFilters) {
+    return res.json({ data: cache.annualSummary });
+  }
+
+  const f = buildProductionFilters(req.query);
+
+  const rows = db.prepare(`
+    SELECT SUBSTR(production_date, 1, 4) AS year,
+           SUM(oil_volume) AS total_oil,
+           SUM(gas_volume) AS total_gas,
+           SUM(water_volume) AS total_water,
+           COUNT(DISTINCT api_well_number) AS well_count,
+           COUNT(DISTINCT lease_number) AS lease_count
+    FROM production
+    WHERE ${f.where}
+    GROUP BY SUBSTR(production_date, 1, 4)
+    ORDER BY year
+  `).all(f.params);
+
+  res.json({ data: rows });
 });
 
 // GET /api/production/by-lease?lease_number=
