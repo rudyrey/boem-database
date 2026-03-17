@@ -103,7 +103,7 @@
 /* Split layout for entity views */
 .split-layout {
   display: flex;
-  gap: var(--space-lg);
+  gap: 0;
   height: calc(100vh - var(--header-height) - 140px);
   min-height: 400px;
 }
@@ -113,12 +113,48 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  margin-right: var(--space-sm);
 }
 
 .split-detail {
   width: var(--detail-panel-width);
   flex-shrink: 0;
   overflow-y: auto;
+  margin-left: var(--space-sm);
+}
+
+/* Split resize handle */
+.split-handle {
+  width: 6px;
+  cursor: col-resize;
+  flex-shrink: 0;
+  position: relative;
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+
+.split-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 32px;
+  background: var(--color-border);
+  border-radius: 1px;
+  transition: background var(--transition-fast), height var(--transition-fast);
+}
+
+.split-handle:hover::after,
+.split-handle.active::after {
+  background: var(--color-primary-light);
+  height: 48px;
+}
+
+.split-handle:hover,
+.split-handle.active {
+  background: var(--color-border-light);
 }
 
 /* Loading overlay */

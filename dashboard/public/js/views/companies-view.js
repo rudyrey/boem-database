@@ -1,6 +1,7 @@
 import { apiGet, getStats } from '../core/api.js';
 import { formatNumber, escapeHtml } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
+import { initSplitResizer } from '../components/split-resizer.js';
 import { ChartPanel, productionChartConfig } from '../components/chart-panel.js';
 
 export async function initCompaniesView(container, params) {
@@ -45,6 +46,8 @@ export async function initCompaniesView(container, params) {
     }, 400);
   });
 
+  const resizer = initSplitResizer(container.querySelector('.split-layout'));
+
   table.load();
 
   // Direct navigation to a company
@@ -66,17 +69,19 @@ export async function initCompaniesView(container, params) {
           <h3>${escapeHtml(c.company_name || 'N/A')}</h3>
           <span class="badge badge-info">#${c.company_num}</span>
         </div>
-        <div class="kv-section">
-          <div class="kv-row"><span class="kv-label">Company Number</span><span class="kv-value">${c.company_num}</span></div>
-          <div class="kv-row"><span class="kv-label">Company Name</span><span class="kv-value">${escapeHtml(c.company_name || 'N/A')}</span></div>
-          <div class="kv-row"><span class="kv-label">Business Associate</span><span class="kv-value">${escapeHtml(c.bus_asc_name || 'N/A')}</span></div>
-        </div>
+        <div class="detail-body">
+          <div class="kv-section">
+            <div class="kv-row"><span class="kv-label">Company Number</span><span class="kv-value">${c.company_num}</span></div>
+            <div class="kv-row"><span class="kv-label">Company Name</span><span class="kv-value">${escapeHtml(c.company_name || 'N/A')}</span></div>
+            <div class="kv-row"><span class="kv-label">Business Associate</span><span class="kv-value">${escapeHtml(c.bus_asc_name || 'N/A')}</span></div>
+          </div>
 
-        <div class="kv-section">
-          <h4>Related Entities</h4>
-          <div class="kv-row"><span class="kv-label">Wells Operated</span><span class="kv-value">${formatNumber(c.wellCount || 0)}</span></div>
-          <div class="kv-row"><span class="kv-label">Platforms Operated</span><span class="kv-value">${formatNumber(c.platformCount || 0)}</span></div>
-          <div class="kv-row"><span class="kv-label">Leases (Owner)</span><span class="kv-value">${formatNumber(c.leaseCount || 0)}</span></div>
+          <div class="kv-section">
+            <div class="kv-section-title">Related Entities</div>
+            <div class="kv-row"><span class="kv-label">Wells Operated</span><span class="kv-value">${formatNumber(c.wellCount || 0)}</span></div>
+            <div class="kv-row"><span class="kv-label">Platforms Operated</span><span class="kv-value">${formatNumber(c.platformCount || 0)}</span></div>
+            <div class="kv-row"><span class="kv-label">Leases (Owner)</span><span class="kv-value">${formatNumber(c.leaseCount || 0)}</span></div>
+          </div>
         </div>
 
         <div class="detail-tabs">
@@ -84,7 +89,7 @@ export async function initCompaniesView(container, params) {
           <button class="tab-btn" data-tab="leases">Leases (${c.leaseCount || 0})</button>
           <button class="tab-btn" data-tab="platforms">Platforms (${c.platformCount || 0})</button>
         </div>
-        <div id="company-tab-content"></div>
+        <div id="company-tab-content" style="padding: var(--space-sm) var(--space-md) var(--space-md)"></div>
       `;
 
       // Tab switching
@@ -103,22 +108,27 @@ export async function initCompaniesView(container, params) {
     }
   }
 
-  async function loadTab(companyNum, tab) {
+  async function loadTab(companyNum, tab, page = 1) {
     const content = document.getElementById('company-tab-content');
     if (!content) return;
     content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
+    const pageSize = 25;
+
     try {
-      const res = await apiGet(`/companies/${companyNum}/${tab}`, { limit: 50 });
+      const res = await apiGet(`/companies/${companyNum}/${tab}`, { limit: pageSize, page });
       const rows = res.data;
+      const total = res.pagination ? res.pagination.total : rows.length;
+      const totalPages = res.pagination ? res.pagination.totalPages : 1;
 
       if (!rows || rows.length === 0) {
         content.innerHTML = '<div class="empty-state">No records found</div>';
         return;
       }
 
+      let tableHTML = '';
       if (tab === 'wells') {
-        content.innerHTML = `
+        tableHTML = `
           <table class="detail-subtable">
             <thead><tr><th>API Number</th><th>Well Name</th><th>Status</th><th>Type</th></tr></thead>
             <tbody>
@@ -132,10 +142,9 @@ export async function initCompaniesView(container, params) {
               `).join('')}
             </tbody>
           </table>
-          ${res.pagination && res.pagination.total > 50 ? `<p class="text-muted" style="padding:8px;font-size:12px">Showing 50 of ${formatNumber(res.pagination.total)}</p>` : ''}
         `;
       } else if (tab === 'leases') {
-        content.innerHTML = `
+        tableHTML = `
           <table class="detail-subtable">
             <thead><tr><th>Lease #</th><th>Area/Block</th><th>Status</th><th>% Owned</th></tr></thead>
             <tbody>
@@ -151,7 +160,7 @@ export async function initCompaniesView(container, params) {
           </table>
         `;
       } else if (tab === 'platforms') {
-        content.innerHTML = `
+        tableHTML = `
           <table class="detail-subtable">
             <thead><tr><th>Complex ID</th><th>Structure</th><th>Area</th><th>Block</th></tr></thead>
             <tbody>
@@ -165,23 +174,40 @@ export async function initCompaniesView(container, params) {
               `).join('')}
             </tbody>
           </table>
-          ${res.pagination && res.pagination.total > 50 ? `<p class="text-muted" style="padding:8px;font-size:12px">Showing 50 of ${formatNumber(res.pagination.total)}</p>` : ''}
         `;
       }
 
+      const paginationHTML = total > pageSize ? `
+        <div class="detail-tab-pagination">
+          <span>Page ${page} of ${totalPages} (${formatNumber(total)} total)</span>
+          <div class="page-btns">
+            <button id="tab-prev" ${page <= 1 ? 'disabled' : ''}>Prev</button>
+            <button id="tab-next" ${page >= totalPages ? 'disabled' : ''}>Next</button>
+          </div>
+        </div>
+      ` : '';
+
+      content.innerHTML = tableHTML + paginationHTML;
+
       // Make rows clickable
       content.querySelectorAll('.clickable-row').forEach(row => {
-        row.style.cursor = 'pointer';
         row.addEventListener('click', () => {
           window.location.hash = row.dataset.href;
         });
       });
+
+      // Pagination buttons
+      const prevBtn = content.querySelector('#tab-prev');
+      const nextBtn = content.querySelector('#tab-next');
+      if (prevBtn) prevBtn.addEventListener('click', () => loadTab(companyNum, tab, page - 1));
+      if (nextBtn) nextBtn.addEventListener('click', () => loadTab(companyNum, tab, page + 1));
     } catch (e) {
       content.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
     }
   }
 
   return () => {
+    if (resizer) resizer.destroy();
     if (detailChart) detailChart.destroy();
   };
 }

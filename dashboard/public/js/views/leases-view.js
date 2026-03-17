@@ -3,6 +3,7 @@ import { formatNumber, formatDate, leaseStatusBadge, wellStatusBadge, formatDept
 import { DataTable } from '../components/data-table.js';
 import { ChartPanel, productionChartConfig } from '../components/chart-panel.js';
 import { debounce } from '../core/utils.js';
+import { initSplitResizer } from '../components/split-resizer.js';
 
 export async function initLeasesView(container, params = {}) {
   const stats = await getStats();
@@ -166,8 +167,10 @@ export async function initLeasesView(container, params = {}) {
     return `<div class="kv-row"><span class="kv-key">${key}</span><span class="kv-value">${val ?? '—'}</span></div>`;
   }
 
+  const resizer = initSplitResizer(container.querySelector('.split-layout'));
+
   if (params.id) showLeaseDetail(params.id);
   table.load();
 
-  return () => { table.destroy(); if (detailChart) detailChart.destroy(); };
+  return () => { table.destroy(); if (resizer) resizer.destroy(); if (detailChart) detailChart.destroy(); };
 }
