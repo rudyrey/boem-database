@@ -19,7 +19,7 @@ export async function initWellsView(container, params = {}) {
     </div>
     <div class="filter-bar" id="well-filters">
       <input type="text" id="wf-search" placeholder="Search wells...">
-      <div id="wf-area-ms"></div>
+      <input type="text" id="wf-area" placeholder="Area/Block...">
       <div id="wf-status-ms"></div>
       <div id="wf-type-ms"></div>
       <div class="filter-group">
@@ -53,14 +53,6 @@ export async function initWellsView(container, params = {}) {
       </div>
     </div>
   `;
-
-  // Multi-select for area/block
-  const areaMS = new MultiSelect({
-    container: document.getElementById('wf-area-ms'),
-    label: 'Area/Block',
-    options: (opts.wellAreaBlocks || []).map(a => ({ value: a, label: a })),
-    onChange: () => applyFilters(),
-  });
 
   // Multi-select for status
   const statusMS = new MultiSelect({
@@ -101,12 +93,11 @@ export async function initWellsView(container, params = {}) {
   });
 
   const applyFilters = debounce(() => {
-    const areaVals = areaMS.getValues();
     const statusVals = statusMS.getValues();
     const typeVals = typeMS.getValues();
     table.setFilters({
       search: document.getElementById('wf-search').value || undefined,
-      area_block: areaVals.length > 0 ? areaVals.join(',') : undefined,
+      area_block: document.getElementById('wf-area').value || undefined,
       status_code: statusVals.length > 0 ? statusVals.join(',') : undefined,
       type_code: typeVals.length > 0 ? typeVals.join(',') : undefined,
       spud_from: document.getElementById('wf-spud-from').value || undefined,
@@ -124,7 +115,6 @@ export async function initWellsView(container, params = {}) {
   document.querySelectorAll('#well-filters input').forEach(el => el.addEventListener('input', applyFilters));
   document.getElementById('wf-clear').addEventListener('click', () => {
     document.querySelectorAll('#well-filters input').forEach(el => el.value = '');
-    areaMS.clear();
     statusMS.clear();
     typeMS.clear();
     applyFilters();
@@ -283,7 +273,6 @@ export async function initWellsView(container, params = {}) {
 
   return () => {
     table.destroy();
-    areaMS.destroy();
     statusMS.destroy();
     typeMS.destroy();
     if (detailChart) detailChart.destroy();

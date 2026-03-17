@@ -37,10 +37,9 @@ router.get('/',
       const ph = typeCodes.map((c, i) => { params[`tc_${i}`] = c; return `@tc_${i}`; }).join(',');
       where += ` AND w.type_code IN (${ph})`;
     }
-    const areaBlocks = area_block ? area_block.split(',').filter(Boolean) : [];
-    if (areaBlocks.length > 0) {
-      const ph = areaBlocks.map((v, i) => { params[`ab_${i}`] = v; return `@ab_${i}`; }).join(',');
-      where += ` AND w.area_block IN (${ph})`;
+    if (area_block) {
+      where += ' AND w.area_block LIKE @area_block';
+      params.area_block = `%${area_block}%`;
     }
     if (operator_num) { where += ' AND w.operator_num = @operator_num'; params.operator_num = operator_num; }
     if (spud_from) { where += ' AND w.spud_date >= @spud_from'; params.spud_from = spud_from; }
