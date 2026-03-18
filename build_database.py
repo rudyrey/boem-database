@@ -19,6 +19,7 @@ Data sources:
   - Field Production (delimited)
   - OGOR-A Production (delimited, 1996-2025)
   - Rig ID List (delimited)
+  - APD / Permits to Drill (delimited)
   - Lease List (fixed-width)
   - Appendix A: Area/Block to Field (delimited)
   - Appendix B: Lease to Field (delimited)
@@ -90,6 +91,21 @@ def parse_date_mmddyyyy(val):
     if v is None:
         return None
     parts = v.split("/")
+    if len(parts) == 3:
+        m, d, y = parts
+        if y.strip() and m.strip() and d.strip():
+            return f"{y.strip()}-{m.strip().zfill(2)}-{d.strip().zfill(2)}"
+    return None
+
+
+def parse_date_mdy(val):
+    """Parse M/D/YYYY (with optional time) to YYYY-MM-DD."""
+    v = s(val)
+    if v is None:
+        return None
+    # Strip time portion if present (e.g. "3/27/2024 7:30:24 AM")
+    date_part = v.split(" ")[0] if " " in v else v
+    parts = date_part.split("/")
     if len(parts) == 3:
         m, d, y = parts
         if y.strip() and m.strip() and d.strip():
@@ -537,6 +553,29 @@ def create_schema(conn):
     -- PRODUCTION (OGOR-A)
     -- ========================================================
 
+    CREATE TABLE IF NOT EXISTS apd (
+        sn_apd              TEXT PRIMARY KEY,
+        api_well_number     TEXT,
+        operator_num        TEXT,
+        well_name           TEXT,
+        permit_type         TEXT,
+        well_type_code      TEXT,
+        water_depth         INTEGER,
+        req_spud_date       TEXT,
+        apd_status_dt       TEXT,
+        apd_sub_status_dt   TEXT,
+        surf_area_code      TEXT,
+        surf_block_number   TEXT,
+        surf_lease_number   TEXT,
+        botm_area_code      TEXT,
+        botm_block_number   TEXT,
+        botm_lease_number   TEXT,
+        rig_name            TEXT,
+        rig_type_code       TEXT,
+        rig_id_num          TEXT,
+        bus_asc_name        TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS production (
         lease_number        TEXT,
         completion_name     TEXT,
@@ -586,6 +625,8 @@ def create_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status_code);
 
     CREATE INDEX IF NOT EXISTS idx_pipeline_locs_seg ON pipeline_locations(segment_num);
+
+    CREATE INDEX IF NOT EXISTS idx_apd_api ON apd(api_well_number);
 
     CREATE INDEX IF NOT EXISTS idx_production_lease ON production(lease_number);
     CREATE INDEX IF NOT EXISTS idx_production_api ON production(api_well_number);
@@ -1150,6 +1191,54 @@ def load_wells(conn):
     print(f"  -> {len(data)} wells loaded")
 
 
+def load_apd(conn):
+    """Load APD (Application for Permit to Drill) data."""
+    print("Loading APD permits...")
+    filepath = EXTRACTED_DIR / "mv_apd_main.txt"
+    if not filepath.exists():
+        print("  -> mv_apd_main.txt not found, skipping APD")
+        return
+    rows = parse_delimited_file(filepath)
+    # First row is the header — skip it
+    # Header: SN_APD(0), API_WELL_NUMBER(1), MMS_COMPANY_NUM(2), KICKOFF_POINT_MD(3),
+    #   WELL_NAME(4), ..., WATER_DEPTH(7), PERMIT_TYPE(8), ..., MINERAL_CODE(10),
+    #   REQ_SPUD_DATE(11), ..., WELL_TYPE_CODE(13), ...,
+    #   SURF_AREA_CODE(16), SURF_BLOCK_NUMBER(17), SURF_LEASE_NUMBER(18), ...,
+    #   BOTM_AREA_CODE(28), BOTM_BLOCK_NUMBER(29), BOTM_LEASE_NUMBER(30), ...,
+    #   RIG_NAME(45), RIG_TYPE_CODE(46), RIG_ID_NUM(47), ...,
+    #   BUS_ASC_NAME(59), APD_SUB_STATUS_DT(60), APD_STATUS_DT(61)
+    data = []
+    for i, r in enumerate(rows):
+        if i == 0:  # skip header
+            continue
+        if len(r) < 62:
+            continue
+        data.append((
+            s(r[0]),              # sn_apd
+            s(r[1]),              # api_well_number
+            s(r[2]),              # operator_num (MMS_COMPANY_NUM)
+            s(r[4]),              # well_name
+            s(r[8]),              # permit_type
+            s(r[13]),             # well_type_code
+            to_int(r[7]),         # water_depth
+            parse_date_mdy(r[11]),  # req_spud_date
+            parse_date_mdy(r[61]),  # apd_status_dt
+            parse_date_mdy(r[60]),  # apd_sub_status_dt
+            s(r[16]),             # surf_area_code
+            s(r[17]),             # surf_block_number
+            s(r[18]),             # surf_lease_number
+            s(r[28]),             # botm_area_code
+            s(r[29]),             # botm_block_number
+            s(r[30]),             # botm_lease_number
+            s(r[45]),             # rig_name
+            s(r[46]),             # rig_type_code
+            s(r[47]),             # rig_id_num
+            s(r[59]),             # bus_asc_name
+        ))
+    conn.executemany(f"INSERT OR REPLACE INTO apd VALUES ({','.join('?' * 20)})", data)
+    print(f"  -> {len(data)} APD permits loaded")
+
+
 def load_pipelines(conn):
     print("Loading pipeline masters...")
     rows = parse_delimited_file(EXTRACTED_DIR / "pplmastdelimit.txt")
@@ -1487,6 +1576,8 @@ def main():
 
         # Load well data
         load_wells(conn)
+        conn.commit()
+        load_apd(conn)
         conn.commit()
 
         # Load pipeline data

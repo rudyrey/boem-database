@@ -189,10 +189,11 @@ export async function initWellsView(container, params = {}) {
     const detailEl = document.getElementById('well-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
-    const [well, prodRes, platRes] = await Promise.all([
+    const [well, prodRes, platRes, apdRes] = await Promise.all([
       apiGet(`/wells/${encodeURIComponent(id)}`),
       apiGet(`/wells/${encodeURIComponent(id)}/production`),
       apiGet(`/wells/${encodeURIComponent(id)}/platforms`),
+      apiGet(`/wells/${encodeURIComponent(id)}/apds`),
     ]);
 
     detailEl.innerHTML = `
@@ -233,6 +234,20 @@ export async function initWellsView(container, params = {}) {
                   <td><a class="link-value" href="#/platforms/${p.complex_id}">${p.complex_id}</a></td>
                   <td>${escapeHtml(p.structure_name || '—')}</td>
                   <td>${p.structure_type || '—'}</td>
+                </tr>`).join('')}</tbody>
+              </table>
+            </div>
+          ` : ''}
+          ${apdRes.data.length > 0 ? `
+            <div class="kv-section">
+              <div class="kv-section-title">Drilling Permits (${apdRes.data.length})</div>
+              <table class="detail-subtable">
+                <thead><tr><th>Permit Type</th><th>Spud Date</th><th>Status Date</th><th>Rig</th></tr></thead>
+                <tbody>${apdRes.data.map(a => `<tr>
+                  <td>${escapeHtml(a.permit_type || '—')}</td>
+                  <td>${formatDate(a.req_spud_date)}</td>
+                  <td>${formatDate(a.apd_status_dt)}</td>
+                  <td>${escapeHtml(a.rig_name || '—')}</td>
                 </tr>`).join('')}</tbody>
               </table>
             </div>
