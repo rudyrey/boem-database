@@ -257,6 +257,8 @@
 .badge-warning { background: rgba(243, 156, 18, 0.1); color: var(--color-warning); }
 .badge-info { background: rgba(52, 152, 219, 0.1); color: var(--color-info); }
 .badge-muted { background: rgba(127, 140, 141, 0.1); color: var(--color-text-muted); }
+.badge-drilling { background: rgba(41, 128, 185, 0.12); color: #2471a3; }
+.badge-modify { background: rgba(230, 126, 34, 0.12); color: #ca6f1e; }
 
 .flag-yes { color: var(--color-success); font-weight: 600; }
 .flag-no { color: var(--color-text-light); }

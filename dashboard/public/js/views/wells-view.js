@@ -244,7 +244,7 @@ export async function initWellsView(container, params = {}) {
               <div class="kv-section-title">Drilling Permits (${apdRes.data.length})</div>
               <table class="detail-subtable">
                 <thead><tr><th>Permit Type</th><th>Spud Date</th><th>Status Date</th><th>Rig</th></tr></thead>
-                <tbody>${apdRes.data.map(a => `<tr>
+                <tbody>${apdRes.data.map(a => `<tr class="clickable-row" onclick="window.location.hash='#/submissions/apd/${a.sn_apd}'">
                   <td>${escapeHtml(a.permit_type || '—')}</td>
                   <td>${formatDate(a.req_spud_date)}</td>
                   <td>${formatDate(a.apd_status_dt)}</td>
@@ -258,7 +258,7 @@ export async function initWellsView(container, params = {}) {
               <div class="kv-section-title">Modification Permits (${apmRes.data.length})</div>
               <table class="detail-subtable">
                 <thead><tr><th>Operation</th><th>Status Date</th><th>Work Starts</th><th>Est. Days</th></tr></thead>
-                <tbody>${apmRes.data.map(m => `<tr>
+                <tbody>${apmRes.data.map(m => `<tr class="clickable-row" onclick="window.location.hash='#/submissions/apm/${m.sn_apm}'">
                   <td>${escapeHtml(m.apm_op_cd || '—')}</td>
                   <td>${formatDate(m.acc_status_date)}</td>
                   <td>${formatDate(m.work_commences_date)}</td>

@@ -46,6 +46,16 @@ import { showToast } from './core/toast.js';
     return initWellsView(container, params);
   });
 
+  router.add('/submissions', async () => {
+    const { initSubmissionsView } = await import('./views/submissions-view.js');
+    return initSubmissionsView(container);
+  });
+
+  router.add('/submissions/:type/:sn', async (params) => {
+    const { initSubmissionsView } = await import('./views/submissions-view.js');
+    return initSubmissionsView(container, params);
+  });
+
   router.add('/leases', async () => {
     const { initLeasesView } = await import('./views/leases-view.js');
     return initLeasesView(container);
