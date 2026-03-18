@@ -167,17 +167,22 @@ router.get('/:id/platforms', (req, res) => {
 
 // GET /api/wells/:id/apds — drilling permits for one well
 router.get('/:id/apds', (req, res) => {
-  const rows = db.prepare(`
-    SELECT sn_apd, permit_type, well_type_code, req_spud_date,
-           apd_status_dt, apd_sub_status_dt, water_depth,
-           rig_name, rig_type_code, bus_asc_name,
-           surf_area_code, surf_block_number,
-           botm_area_code, botm_block_number
-    FROM apd
-    WHERE api_well_number = @id
-    ORDER BY apd_status_dt DESC
-  `).all({ id: req.params.id });
-  res.json({ data: rows });
+  try {
+    const rows = db.prepare(`
+      SELECT sn_apd, permit_type, well_type_code, req_spud_date,
+             apd_status_dt, apd_sub_status_dt, water_depth,
+             rig_name, rig_type_code, bus_asc_name,
+             surf_area_code, surf_block_number,
+             botm_area_code, botm_block_number
+      FROM apd
+      WHERE api_well_number = @id
+      ORDER BY apd_status_dt DESC
+    `).all({ id: req.params.id });
+    res.json({ data: rows });
+  } catch (err) {
+    // Table may not exist in older database builds
+    res.json({ data: [] });
+  }
 });
 
 module.exports = router;
