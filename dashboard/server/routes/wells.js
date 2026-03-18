@@ -185,4 +185,24 @@ router.get('/:id/apds', (req, res) => {
   }
 });
 
+// GET /api/wells/:id/apms — modification permits for one well
+router.get('/:id/apms', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT sn_apm, apm_op_cd, well_type_code, borehole_stat_cd,
+             acc_status_date, sub_stat_date, work_commences_date,
+             est_operation_days, rig_id_num, bus_asc_name,
+             surf_area_code, surf_block_num,
+             botm_area_code, botm_block_num
+      FROM apm
+      WHERE api_well_number = @id
+      ORDER BY acc_status_date DESC
+    `).all({ id: req.params.id });
+    res.json({ data: rows });
+  } catch (err) {
+    // Table may not exist in older database builds
+    res.json({ data: [] });
+  }
+});
+
 module.exports = router;

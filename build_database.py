@@ -576,6 +576,30 @@ def create_schema(conn):
         bus_asc_name        TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS apm (
+        sn_apm              TEXT PRIMARY KEY,
+        api_well_number     TEXT,
+        operator_num        TEXT,
+        well_name           TEXT,
+        well_type_code      TEXT,
+        water_depth         INTEGER,
+        borehole_stat_cd    TEXT,
+        apm_op_cd           TEXT,
+        acc_status_date     TEXT,
+        sub_stat_date       TEXT,
+        surf_area_code      TEXT,
+        surf_block_num      TEXT,
+        surf_lease_num      TEXT,
+        botm_area_code      TEXT,
+        botm_block_num      TEXT,
+        botm_lease_num      TEXT,
+        rig_id_num          TEXT,
+        bus_asc_name        TEXT,
+        sv_type             TEXT,
+        est_operation_days  INTEGER,
+        work_commences_date TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS production (
         lease_number        TEXT,
         completion_name     TEXT,
@@ -627,6 +651,8 @@ def create_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_pipeline_locs_seg ON pipeline_locations(segment_num);
 
     CREATE INDEX IF NOT EXISTS idx_apd_api ON apd(api_well_number);
+
+    CREATE INDEX IF NOT EXISTS idx_apm_api ON apm(api_well_number);
 
     CREATE INDEX IF NOT EXISTS idx_production_lease ON production(lease_number);
     CREATE INDEX IF NOT EXISTS idx_production_api ON production(api_well_number);
@@ -1239,6 +1265,55 @@ def load_apd(conn):
     print(f"  -> {len(data)} APD permits loaded")
 
 
+def load_apm(conn):
+    """Load APM (Application for Permit to Modify) data."""
+    print("Loading APM permits...")
+    filepath = EXTRACTED_DIR / "mv_apm_main.txt"
+    if not filepath.exists():
+        print("  -> mv_apm_main.txt not found, skipping APM")
+        return
+    rows = parse_delimited_file(filepath)
+    # Header: SN_APM(0), MMS_COMPANY_NUM(1), API_WELL_NUMBER(2), WATER_DEPTH(3),
+    #   WELL_NM(4), WELL_NM_BP_SFIX(5), WELL_NM_ST_SFIX(6),
+    #   SURF_AREA_CODE(7), SURF_BLOCK_NUM(8), SURF_LEASE_NUM(9),
+    #   BOTM_AREA_CODE(10), BOTM_BLOCK_NUM(11), BOTM_LEASE_NUM(12),
+    #   RIG_ID_NUM(13), BOREHOLE_STAT_CD(14), WELL_TYPE_CODE(15),
+    #   ACC_STATUS_DATE(16), APM_OP_CD(17), SUB_STAT_DATE(18),
+    #   BUS_ASC_NAME(19), SV_TYPE(20), SV_FEET_BML(21),
+    #   SHUTIN_TUBING_PRSS(22), EST_OPERATION_DAYS(23), WORK_COMMENCES_DATE(24)
+    data = []
+    for i, r in enumerate(rows):
+        if i == 0:  # skip header
+            continue
+        if len(r) < 25:
+            continue
+        data.append((
+            s(r[0]),              # sn_apm
+            s(r[2]),              # api_well_number
+            s(r[1]),              # operator_num (MMS_COMPANY_NUM)
+            s(r[4]),              # well_name
+            s(r[15]),             # well_type_code
+            to_int(r[3]),         # water_depth
+            s(r[14]),             # borehole_stat_cd
+            s(r[17]),             # apm_op_cd
+            parse_date_mdy(r[16]),  # acc_status_date
+            parse_date_mdy(r[18]),  # sub_stat_date
+            s(r[7]),              # surf_area_code
+            s(r[8]),              # surf_block_num
+            s(r[9]),              # surf_lease_num
+            s(r[10]),             # botm_area_code
+            s(r[11]),             # botm_block_num
+            s(r[12]),             # botm_lease_num
+            s(r[13]),             # rig_id_num
+            s(r[19]),             # bus_asc_name
+            s(r[20]),             # sv_type
+            to_int(r[23]),        # est_operation_days
+            parse_date_mdy(r[24]),  # work_commences_date
+        ))
+    conn.executemany(f"INSERT OR REPLACE INTO apm VALUES ({','.join('?' * 21)})", data)
+    print(f"  -> {len(data)} APM permits loaded")
+
+
 def load_pipelines(conn):
     print("Loading pipeline masters...")
     rows = parse_delimited_file(EXTRACTED_DIR / "pplmastdelimit.txt")
@@ -1578,6 +1653,8 @@ def main():
         load_wells(conn)
         conn.commit()
         load_apd(conn)
+        conn.commit()
+        load_apm(conn)
         conn.commit()
 
         # Load pipeline data

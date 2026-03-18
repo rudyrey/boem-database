@@ -189,11 +189,12 @@ export async function initWellsView(container, params = {}) {
     const detailEl = document.getElementById('well-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
-    const [well, prodRes, platRes, apdRes] = await Promise.all([
+    const [well, prodRes, platRes, apdRes, apmRes] = await Promise.all([
       apiGet(`/wells/${encodeURIComponent(id)}`),
       apiGet(`/wells/${encodeURIComponent(id)}/production`),
       apiGet(`/wells/${encodeURIComponent(id)}/platforms`),
       apiGet(`/wells/${encodeURIComponent(id)}/apds`),
+      apiGet(`/wells/${encodeURIComponent(id)}/apms`),
     ]);
 
     detailEl.innerHTML = `
@@ -248,6 +249,20 @@ export async function initWellsView(container, params = {}) {
                   <td>${formatDate(a.req_spud_date)}</td>
                   <td>${formatDate(a.apd_status_dt)}</td>
                   <td>${escapeHtml(a.rig_name || '—')}</td>
+                </tr>`).join('')}</tbody>
+              </table>
+            </div>
+          ` : ''}
+          ${apmRes.data.length > 0 ? `
+            <div class="kv-section">
+              <div class="kv-section-title">Modification Permits (${apmRes.data.length})</div>
+              <table class="detail-subtable">
+                <thead><tr><th>Operation</th><th>Status Date</th><th>Work Starts</th><th>Est. Days</th></tr></thead>
+                <tbody>${apmRes.data.map(m => `<tr>
+                  <td>${escapeHtml(m.apm_op_cd || '—')}</td>
+                  <td>${formatDate(m.acc_status_date)}</td>
+                  <td>${formatDate(m.work_commences_date)}</td>
+                  <td>${m.est_operation_days != null ? m.est_operation_days : '—'}</td>
                 </tr>`).join('')}</tbody>
               </table>
             </div>
