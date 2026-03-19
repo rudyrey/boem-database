@@ -197,9 +197,21 @@ def create_schema(conn):
     );
 
     CREATE TABLE IF NOT EXISTS rigs (
-        rig_id      TEXT PRIMARY KEY,
-        rig_name    TEXT,
-        rig_type    TEXT
+        rig_id              TEXT PRIMARY KEY,
+        rig_name            TEXT,
+        rig_type            TEXT,
+        rig_func_code       TEXT,
+        construction_yr     INTEGER,
+        shipyard_name       TEXT,
+        refurbished_yr      INTEGER,
+        rated_water_depth   INTEGER,
+        rated_drill_depth   INTEGER,
+        abs_cert_expr_dt    TEXT,
+        cg_cert_expr_dt     TEXT,
+        anchor_flag         TEXT,
+        apd_count           INTEGER DEFAULT 0,
+        apm_count           INTEGER DEFAULT 0,
+        last_permit_date    TEXT
     );
 
     -- ========================================================
@@ -771,11 +783,155 @@ def load_companies(conn):
 
 
 def load_rigs(conn):
+    """Load rigs from basic list, then enrich with APD and APM rig data."""
     print("Loading rigs...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "rigidlistdelimit.txt")
-    data = [(s(r[0]), s(r[1]), s(r[2]) if len(r) > 2 else None) for r in rows if len(r) >= 2]
-    conn.executemany("INSERT OR REPLACE INTO rigs VALUES (?,?,?)", data)
-    print(f"  -> {len(data)} rigs loaded")
+
+    # Step 1: Load basic rig list (rig_id, rig_name, rig_type)
+    basic_path = EXTRACTED_DIR / "rigidlistdelimit.txt"
+    rigs = {}  # keyed by rig_id
+    if basic_path.exists():
+        for r in parse_delimited_file(basic_path):
+            if len(r) >= 2:
+                rid = s(r[0])
+                if rid:
+                    rigs[rid] = {
+                        'rig_id': rid,
+                        'rig_name': s(r[1]),
+                        'rig_type': s(r[2]) if len(r) > 2 else None,
+                    }
+        print(f"  -> {len(rigs)} rigs from basic list")
+
+    # Step 2: Enrich from APD data (most recent per rig_id wins)
+    apd_path = EXTRACTED_DIR / "mv_apd_main.txt"
+    apd_counts = {}
+    apd_last_date = {}
+    if apd_path.exists():
+        rows = parse_delimited_file(apd_path)
+        for i, r in enumerate(rows):
+            if i == 0 or len(r) < 62:
+                continue
+            rid = s(r[47])  # RIG_ID_NUM
+            if not rid:
+                continue
+            apd_counts[rid] = apd_counts.get(rid, 0) + 1
+            status_dt = parse_date_mdy(r[61])  # APD_STATUS_DT
+            if status_dt:
+                if rid not in apd_last_date or status_dt > apd_last_date[rid]:
+                    apd_last_date[rid] = status_dt
+
+            # Create or update rig entry with enriched data
+            if rid not in rigs:
+                rigs[rid] = {'rig_id': rid}
+            rig = rigs[rid]
+            # Only overwrite with non-None values from newer permits
+            name = s(r[45])  # RIG_NAME
+            if name:
+                rig['rig_name'] = name
+            rtype = s(r[46])  # RIG_TYPE_CODE
+            if rtype:
+                rig['rig_type'] = rtype
+            func = s(r[48])  # RIG_FUNC_CODE
+            if func:
+                rig['rig_func_code'] = func
+            cy = to_int(r[49])  # CONSTRUCTION_YR
+            if cy:
+                rig['construction_yr'] = cy
+            sy = s(r[50])  # SHIPYARD_NAME
+            if sy:
+                rig['shipyard_name'] = sy
+            ry = to_int(r[51])  # REFURBISHED_YR
+            if ry:
+                rig['refurbished_yr'] = ry
+            rwd = to_int(r[52])  # RATED_WTR_DEPTH
+            if rwd:
+                rig['rated_water_depth'] = rwd
+            rdd = to_int(r[53])  # RATE_DRIL_DEPTH
+            if rdd:
+                rig['rated_drill_depth'] = rdd
+            abs_dt = parse_date_mdy(r[54])  # ABS_CERT_EXPR_DT
+            if abs_dt:
+                rig['abs_cert_expr_dt'] = abs_dt
+            cg_dt = parse_date_mdy(r[55])  # CG_CERT_EXPR_DT
+            if cg_dt:
+                rig['cg_cert_expr_dt'] = cg_dt
+            af = s(r[44])  # RIG_ANCHOR_FLAG
+            if af:
+                rig['anchor_flag'] = af
+        print(f"  -> enriched from {len(apd_counts)} unique rigs in APD data")
+
+    # Step 3: Enrich from APM rig view (certification dates)
+    apm_rig_path = EXTRACTED_DIR / "mv_apm_rig_view.txt"
+    if apm_rig_path.exists():
+        rows = parse_delimited_file(apm_rig_path)
+        apm_rig_count = 0
+        for i, r in enumerate(rows):
+            if i == 0 or len(r) < 5:
+                continue
+            rid = s(r[0])  # RIG_ID_NUM
+            if not rid:
+                continue
+            apm_rig_count += 1
+            if rid not in rigs:
+                rigs[rid] = {'rig_id': rid}
+            rig = rigs[rid]
+            name = s(r[1])
+            if name:
+                rig['rig_name'] = name
+            rtype = s(r[4])
+            if rtype:
+                rig['rig_type'] = rtype
+            abs_dt = parse_date_mdy(r[2])
+            if abs_dt:
+                rig.setdefault('abs_cert_expr_dt', abs_dt)
+            cg_dt = parse_date_mdy(r[3])
+            if cg_dt:
+                rig.setdefault('cg_cert_expr_dt', cg_dt)
+        print(f"  -> merged {apm_rig_count} rigs from APM rig view")
+
+    # Step 4: Count APM permits per rig
+    apm_counts = {}
+    apm_last = {}
+    apm_path = EXTRACTED_DIR / "mv_apm_main.txt"
+    if apm_path.exists():
+        rows = parse_delimited_file(apm_path)
+        for i, r in enumerate(rows):
+            if i == 0 or len(r) < 25:
+                continue
+            rid = s(r[13])  # RIG_ID_NUM
+            if not rid:
+                continue
+            apm_counts[rid] = apm_counts.get(rid, 0) + 1
+            dt = parse_date_mdy(r[16])  # ACC_STATUS_DATE
+            if dt and (rid not in apm_last or dt > apm_last[rid]):
+                apm_last[rid] = dt
+
+    # Step 5: Build final insert data
+    data = []
+    for rid, rig in rigs.items():
+        apd_c = apd_counts.get(rid, 0)
+        apm_c = apm_counts.get(rid, 0)
+        last_apd = apd_last_date.get(rid)
+        last_apm = apm_last.get(rid)
+        last_permit = max(filter(None, [last_apd, last_apm]), default=None)
+        data.append((
+            rig.get('rig_id'),
+            rig.get('rig_name'),
+            rig.get('rig_type'),
+            rig.get('rig_func_code'),
+            rig.get('construction_yr'),
+            rig.get('shipyard_name'),
+            rig.get('refurbished_yr'),
+            rig.get('rated_water_depth'),
+            rig.get('rated_drill_depth'),
+            rig.get('abs_cert_expr_dt'),
+            rig.get('cg_cert_expr_dt'),
+            rig.get('anchor_flag'),
+            apd_c,
+            apm_c,
+            last_permit,
+        ))
+    conn.executemany(f"INSERT OR REPLACE INTO rigs VALUES ({','.join('?' * 15)})", data)
+    print(f"  -> {len(data)} total rigs loaded (enriched)")
 
 
 def load_fields(conn):
