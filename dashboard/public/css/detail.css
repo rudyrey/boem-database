@@ -209,6 +209,35 @@
   border-color: var(--color-primary);
 }
 
+/* Sub-section title within a kv-section */
+.kv-subsection-title {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--color-primary-light);
+  font-weight: 600;
+  margin-top: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+/* Tag list for sub-operations */
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: var(--font-size-xs);
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
 /* Clickable rows styled as links */
 .clickable-row {
   cursor: pointer;

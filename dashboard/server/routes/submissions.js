@@ -125,6 +125,44 @@ router.get('/apd/:sn', (req, res) => {
   }
 });
 
+// GET /api/submissions/apd/:sn/casing — casing intervals + sections for one APD
+router.get('/apd/:sn/casing', (req, res) => {
+  try {
+    const intervals = db.prepare(`
+      SELECT * FROM apd_casing_intervals
+      WHERE sn_apd_fk = @sn
+      ORDER BY csng_intv_num
+    `).all({ sn: req.params.sn });
+
+    // For each interval, attach its casing sections
+    for (const intv of intervals) {
+      intv.sections = db.prepare(`
+        SELECT * FROM apd_casing_sections
+        WHERE sn_apd_csng_intv_fk = @fk
+        ORDER BY casing_section_num
+      `).all({ fk: intv.sn_apd_csg_intv });
+    }
+
+    res.json({ data: intervals });
+  } catch (err) {
+    res.json({ data: [] });
+  }
+});
+
+// GET /api/submissions/apd/:sn/geologic — geologic markers for one APD
+router.get('/apd/:sn/geologic', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT * FROM apd_geologic
+      WHERE sn_apd = @sn
+      ORDER BY top_md
+    `).all({ sn: req.params.sn });
+    res.json({ data: rows });
+  } catch (err) {
+    res.json({ data: [] });
+  }
+});
+
 // GET /api/submissions/apm/:sn — full APM detail
 router.get('/apm/:sn', (req, res) => {
   try {
@@ -138,6 +176,32 @@ router.get('/apm/:sn', (req, res) => {
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: 'Table not available' });
+  }
+});
+
+// GET /api/submissions/apm/:sn/preventers — BOP/preventer data for one APM
+router.get('/apm/:sn/preventers', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT * FROM apm_preventers
+      WHERE sn_apm_fk = @sn
+    `).all({ sn: req.params.sn });
+    res.json({ data: rows });
+  } catch (err) {
+    res.json({ data: [] });
+  }
+});
+
+// GET /api/submissions/apm/:sn/suboperations — sub-operations for one APM
+router.get('/apm/:sn/suboperations', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT * FROM apm_suboperations
+      WHERE sn_apm_fk = @sn
+    `).all({ sn: req.params.sn });
+    res.json({ data: rows });
+  } catch (err) {
+    res.json({ data: [] });
   }
 });
 

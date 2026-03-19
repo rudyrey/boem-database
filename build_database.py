@@ -576,6 +576,67 @@ def create_schema(conn):
         bus_asc_name        TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS apd_casing_intervals (
+        sn_apd_csg_intv     TEXT PRIMARY KEY,
+        sn_apd_fk           TEXT,
+        csng_intv_num       INTEGER,
+        csng_intv_type_cd   TEXT,
+        csng_intv_name      TEXT,
+        csng_holesize       TEXT,
+        csng_mud_wgt_ppg    REAL,
+        csng_mud_type_cd    TEXT,
+        csng_frac_grad_ppg  REAL,
+        csng_top_md         REAL,
+        csng_cement_vol     REAL,
+        csng_preventer_cd   TEXT,
+        csng_bop_stack_size TEXT,
+        csng_wellhead_rating TEXT,
+        csng_annular_rating TEXT,
+        csng_bop_rating     TEXT,
+        csng_annular_test_prss REAL,
+        csng_bop_div_test_prss REAL,
+        csng_mud_test_prss  REAL,
+        csng_liner_test     REAL,
+        csng_formation_test_prss REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS apd_casing_sections (
+        sn_apd_csng_intv_fk TEXT,
+        casing_section_num  INTEGER,
+        casing_size         TEXT,
+        casing_weight       REAL,
+        casing_grade        TEXT,
+        casing_burst_psi    REAL,
+        casing_collapse_psi REAL,
+        casing_section_md   REAL,
+        casing_section_tvd  REAL,
+        casing_pore_prss_ppg REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS apd_geologic (
+        sn_apd              TEXT,
+        h2s_designation     TEXT,
+        h2s_actvtn_plan_tvd TEXT,
+        geo_marker_name     TEXT,
+        top_md              REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS apm_preventers (
+        sn_apm_fk           TEXT,
+        sn_apm_preventer    TEXT PRIMARY KEY,
+        apm_preventer_cd    TEXT,
+        bop_stack_size      TEXT,
+        bop_working_prss    REAL,
+        bop_high_test_prss  REAL,
+        bop_low_test_prss   REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS apm_suboperations (
+        sn_apm_fk           TEXT,
+        sn_apm_suboperation TEXT PRIMARY KEY,
+        apm_subop_cd        TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS apm (
         sn_apm              TEXT PRIMARY KEY,
         api_well_number     TEXT,
@@ -651,8 +712,13 @@ def create_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_pipeline_locs_seg ON pipeline_locations(segment_num);
 
     CREATE INDEX IF NOT EXISTS idx_apd_api ON apd(api_well_number);
+    CREATE INDEX IF NOT EXISTS idx_apd_casing_intervals_fk ON apd_casing_intervals(sn_apd_fk);
+    CREATE INDEX IF NOT EXISTS idx_apd_casing_sections_fk ON apd_casing_sections(sn_apd_csng_intv_fk);
+    CREATE INDEX IF NOT EXISTS idx_apd_geologic_fk ON apd_geologic(sn_apd);
 
     CREATE INDEX IF NOT EXISTS idx_apm_api ON apm(api_well_number);
+    CREATE INDEX IF NOT EXISTS idx_apm_preventers_fk ON apm_preventers(sn_apm_fk);
+    CREATE INDEX IF NOT EXISTS idx_apm_suboperations_fk ON apm_suboperations(sn_apm_fk);
 
     CREATE INDEX IF NOT EXISTS idx_production_lease ON production(lease_number);
     CREATE INDEX IF NOT EXISTS idx_production_api ON production(api_well_number);
@@ -1265,6 +1331,165 @@ def load_apd(conn):
     print(f"  -> {len(data)} APD permits loaded")
 
 
+def load_apd_casing(conn):
+    """Load APD casing intervals and sections."""
+    print("Loading APD casing data...")
+
+    # Casing intervals
+    filepath = EXTRACTED_DIR / "mv_apd_casing_intervals.txt"
+    if not filepath.exists():
+        print("  -> mv_apd_casing_intervals.txt not found, skipping")
+        return
+    rows = parse_delimited_file(filepath)
+    # Header: SN_APD_CSG_INTV(0), SN_APD_FK(1), CSNG_INTV_NUM(2), CSNG_INTV_TYPE_CD(3),
+    #   CSNG_INTV_NAME(4), CSNG_HOLESIZE(5), CSNG_MUD_WGT_PPG(6), CSNG_MUD_TYPE_CD(7),
+    #   CSNG_FRAC_GRAD_PPG(8), CSNG_TOP_MD(9), CSNG_CEMENT_VOL(10), CSNG_PREVENTER_CD(11),
+    #   CSNG_BOP_STACK_SIZE(12), CSNG_WELLHEAD_RATING(13), CSNG_ANNULAR_RATING(14),
+    #   CSNG_BOP_RATING(15), CSNG_ANNULAR_TEST_PRSS(16), CSNG_BOP_DIV_TEST_PRSS(17),
+    #   CSNG_MUD_TEST_PRSS(18), CSNG_LINER_TEST(19), CSNG_FORMATION_TEST_PRSS(20)
+    data = []
+    for i, r in enumerate(rows):
+        if i == 0:
+            continue
+        if len(r) < 21:
+            continue
+        data.append((
+            s(r[0]),              # sn_apd_csg_intv
+            s(r[1]),              # sn_apd_fk
+            to_int(r[2]),         # csng_intv_num
+            s(r[3]),              # csng_intv_type_cd
+            s(r[4]),              # csng_intv_name
+            s(r[5]),              # csng_holesize
+            to_float(r[6]),       # csng_mud_wgt_ppg
+            s(r[7]),              # csng_mud_type_cd
+            to_float(r[8]),       # csng_frac_grad_ppg
+            to_float(r[9]),       # csng_top_md
+            to_float(r[10]),      # csng_cement_vol
+            s(r[11]),             # csng_preventer_cd
+            s(r[12]),             # csng_bop_stack_size
+            s(r[13]),             # csng_wellhead_rating
+            s(r[14]),             # csng_annular_rating
+            s(r[15]),             # csng_bop_rating
+            to_float(r[16]),      # csng_annular_test_prss
+            to_float(r[17]),      # csng_bop_div_test_prss
+            to_float(r[18]),      # csng_mud_test_prss
+            to_float(r[19]),      # csng_liner_test
+            to_float(r[20]),      # csng_formation_test_prss
+        ))
+    conn.executemany(f"INSERT OR REPLACE INTO apd_casing_intervals VALUES ({','.join('?' * 21)})", data)
+    print(f"  -> {len(data)} casing intervals loaded")
+
+    # Casing sections
+    filepath2 = EXTRACTED_DIR / "mv_apd_casing_sectons.txt"
+    if not filepath2.exists():
+        print("  -> mv_apd_casing_sectons.txt not found, skipping")
+        return
+    rows2 = parse_delimited_file(filepath2)
+    # Header: SN_APD_CSNG_INTV_FK(0), CASING_SECTION_NUM(1), CASING_SIZE(2),
+    #   CASING_WEIGHT(3), CASING_GRADE(4), CASING_BURST_PSI(5),
+    #   CASING_COLLPSE_PSI(6), CASING_SECTION_MD(7), CASING_SECTION_TVD(8),
+    #   CASING_PORE_PRSS_PPG(9)
+    data2 = []
+    for i, r in enumerate(rows2):
+        if i == 0:
+            continue
+        if len(r) < 10:
+            continue
+        data2.append((
+            s(r[0]),              # sn_apd_csng_intv_fk
+            to_int(r[1]),         # casing_section_num
+            s(r[2]),              # casing_size
+            to_float(r[3]),       # casing_weight
+            s(r[4]),              # casing_grade
+            to_float(r[5]),       # casing_burst_psi
+            to_float(r[6]),       # casing_collapse_psi
+            to_float(r[7]),       # casing_section_md
+            to_float(r[8]),       # casing_section_tvd
+            to_float(r[9]),       # casing_pore_prss_ppg
+        ))
+    conn.executemany(f"INSERT OR REPLACE INTO apd_casing_sections VALUES ({','.join('?' * 10)})", data2)
+    print(f"  -> {len(data2)} casing sections loaded")
+
+
+def load_apd_geologic(conn):
+    """Load APD geologic marker data."""
+    print("Loading APD geologic data...")
+    filepath = EXTRACTED_DIR / "mv_apd_geologic.txt"
+    if not filepath.exists():
+        print("  -> mv_apd_geologic.txt not found, skipping")
+        return
+    rows = parse_delimited_file(filepath)
+    # Header: SN_APD(0), H2S_DESIGNATION(1), H2S_ACTVTN_PLAN_TVD(2),
+    #   GEO_MARKER_NAME(3), TOP_MD(4)
+    data = []
+    for i, r in enumerate(rows):
+        if i == 0:
+            continue
+        if len(r) < 5:
+            continue
+        data.append((
+            s(r[0]),              # sn_apd
+            s(r[1]),              # h2s_designation
+            s(r[2]),              # h2s_actvtn_plan_tvd
+            s(r[3]),              # geo_marker_name
+            to_float(r[4]),       # top_md
+        ))
+    conn.executemany(f"INSERT OR REPLACE INTO apd_geologic VALUES ({','.join('?' * 5)})", data)
+    print(f"  -> {len(data)} geologic markers loaded")
+
+
+def load_apm_sub_data(conn):
+    """Load APM preventers and suboperations."""
+    print("Loading APM sub-data...")
+
+    # Preventers
+    filepath = EXTRACTED_DIR / "mv_apm_preventers.txt"
+    if filepath.exists():
+        rows = parse_delimited_file(filepath)
+        # Header: SN_APM_FK(0), SN_APM_PREVENTER(1), APM_PREVENTER_CD(2),
+        #   BOP_STACK_SIZE(3), BOP_WORKING_PRSS(4), BOP_HIGH_TEST_PRSS(5), BOP_LOW_TEST_PRSS(6)
+        data = []
+        for i, r in enumerate(rows):
+            if i == 0:
+                continue
+            if len(r) < 7:
+                continue
+            data.append((
+                s(r[0]),              # sn_apm_fk
+                s(r[1]),              # sn_apm_preventer
+                s(r[2]),              # apm_preventer_cd
+                s(r[3]),              # bop_stack_size
+                to_float(r[4]),       # bop_working_prss
+                to_float(r[5]),       # bop_high_test_prss
+                to_float(r[6]),       # bop_low_test_prss
+            ))
+        conn.executemany(f"INSERT OR REPLACE INTO apm_preventers VALUES ({','.join('?' * 7)})", data)
+        print(f"  -> {len(data)} APM preventers loaded")
+    else:
+        print("  -> mv_apm_preventers.txt not found, skipping")
+
+    # Suboperations
+    filepath2 = EXTRACTED_DIR / "mv_apm_suboperations.txt"
+    if filepath2.exists():
+        rows2 = parse_delimited_file(filepath2)
+        # Header: SN_APM_FK(0), SN_APM_SUBOPERATION(1), APM_SUBOP_CD(2)
+        data2 = []
+        for i, r in enumerate(rows2):
+            if i == 0:
+                continue
+            if len(r) < 3:
+                continue
+            data2.append((
+                s(r[0]),              # sn_apm_fk
+                s(r[1]),              # sn_apm_suboperation
+                s(r[2]),              # apm_subop_cd
+            ))
+        conn.executemany(f"INSERT OR REPLACE INTO apm_suboperations VALUES ({','.join('?' * 3)})", data2)
+        print(f"  -> {len(data2)} APM suboperations loaded")
+    else:
+        print("  -> mv_apm_suboperations.txt not found, skipping")
+
+
 def load_apm(conn):
     """Load APM (Application for Permit to Modify) data."""
     print("Loading APM permits...")
@@ -1654,7 +1879,13 @@ def main():
         conn.commit()
         load_apd(conn)
         conn.commit()
+        load_apd_casing(conn)
+        conn.commit()
+        load_apd_geologic(conn)
+        conn.commit()
         load_apm(conn)
+        conn.commit()
+        load_apm_sub_data(conn)
         conn.commit()
 
         # Load pipeline data
