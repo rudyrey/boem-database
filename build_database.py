@@ -26,8 +26,10 @@ Data sources:
   - Appendix C: Operator to Field (delimited)
 """
 
+import argparse
 import csv
 import glob
+import hashlib
 import os
 import re
 import sqlite3
@@ -156,6 +158,49 @@ def parse_fixed_width(filepath, spec, encoding="latin-1"):
                 row[name] = val if val else None
             rows.append(row)
     return rows
+
+
+def file_checksum(*filepaths):
+    """Compute combined MD5 checksum of one or more files. Returns None if none exist."""
+    h = hashlib.md5()
+    found = False
+    for filepath in filepaths:
+        if not filepath.exists():
+            continue
+        found = True
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+    return h.hexdigest() if found else None
+
+
+def init_build_meta(conn):
+    """Create the build metadata table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS _build_meta (
+            source_key  TEXT PRIMARY KEY,
+            checksum    TEXT,
+            built_at    TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.commit()
+
+
+def source_changed(conn, key, checksum):
+    """Check if a source file has changed since last build."""
+    row = conn.execute(
+        "SELECT checksum FROM _build_meta WHERE source_key = ?", (key,)
+    ).fetchone()
+    return row is None or row[0] != checksum
+
+
+def mark_built(conn, key, checksum):
+    """Record that a source was built with a given checksum."""
+    conn.execute(
+        "INSERT OR REPLACE INTO _build_meta (source_key, checksum, built_at) "
+        "VALUES (?, ?, datetime('now'))",
+        (key, checksum),
+    )
 
 
 def extract_if_needed():
@@ -1974,7 +2019,125 @@ def print_summary(conn):
     print(f"  Location: {DB_PATH}")
 
 
+def load_production_incremental(conn):
+    """Load OGOR-A production data, skipping years whose zip files haven't changed."""
+    print("Loading OGOR-A production data (incremental)...")
+    total_loaded = 0
+    total_skipped = 0
+
+    ogora_zips = sorted(RAW_DIR.glob("ogora_*_delimit.zip"))
+    for zf in ogora_zips:
+        year_match = re.search(r"ogora_(\d{4})_delimit\.zip", zf.name)
+        if not year_match:
+            continue
+        year = year_match.group(1)
+        meta_key = f"production_{year}"
+
+        checksum = file_checksum(zf)
+        if not source_changed(conn, meta_key, checksum):
+            total_skipped += 1
+            continue
+
+        # Extract this year's zip
+        with zipfile.ZipFile(zf, "r") as z:
+            z.extractall(EXTRACTED_DIR)
+
+        # Find extracted file
+        if year == "2025":
+            txt_name = "ogoradelimit.txt"
+        else:
+            txt_name = f"ogora{year}delimit.txt"
+
+        txt_path = EXTRACTED_DIR / txt_name
+        if not txt_path.exists():
+            for candidate in EXTRACTED_DIR.glob(f"ogora*{year}*delimit*"):
+                txt_path = candidate
+                break
+
+        if not txt_path.exists():
+            print(f"  WARNING: Could not find extracted file for {year}")
+            continue
+
+        print(f"  Processing {year}...", end=" ")
+
+        # Delete old data for this year before inserting
+        conn.execute(
+            "DELETE FROM production WHERE production_date LIKE ?",
+            (f"{year}%",),
+        )
+
+        rows = parse_delimited_file(txt_path)
+        data = []
+        for r in rows:
+            if len(r) < 14:
+                continue
+            data.append((
+                s(r[0]),              # lease_number
+                s(r[1]),              # completion_name
+                s(r[2]),              # production_date (YYYYMM)
+                to_int(r[3]),         # days_on_production
+                s(r[4]),              # product_code
+                to_float(r[5]),       # oil_volume
+                to_float(r[6]),       # gas_volume
+                to_float(r[7]),       # water_volume
+                s(r[8]),              # api_well_number
+                s(r[9]),              # well_status
+                s(r[10]),             # area_block
+                s(r[11]),             # operator_num
+                s(r[12]),             # operator_name
+                s(r[13]),             # field_name_code
+                to_float(r[14]) if len(r) > 14 else None,
+                s(r[15]) if len(r) > 15 else None,
+                parse_date_yyyymmdd(r[16]) if len(r) > 16 else None,
+                s(r[17]) if len(r) > 17 else None,
+                s(r[18]) if len(r) > 18 else None,
+            ))
+        conn.executemany(f"INSERT INTO production VALUES ({','.join('?' * 19)})", data)
+        mark_built(conn, meta_key, checksum)
+        conn.commit()
+        total_loaded += len(data)
+        print(f"{len(data):,} records")
+
+    if total_skipped:
+        print(f"  -> {total_skipped} years unchanged (skipped)")
+    print(f"  -> {total_loaded:,} production records loaded")
+
+
+# Map each loader to its source zip file(s) and the tables it populates.
+# Format: (meta_key, zip_filenames, loader_fn, tables_to_clear)
+LOADER_MAP = [
+    ("companies",        ["company_all_delimit.zip"],        load_companies,          ["companies"]),
+    ("rigs",             ["rig_id_delimit.zip", "eWellAPDRawData.zip", "eWellAPMRawData.zip"],
+                                                             load_rigs,               ["rigs"]),
+    ("fields",           ["field_names_delimit.zip"],        load_fields,             ["fields"]),
+    ("field_production", ["field_production_delimit.zip"],   load_field_production,   ["field_production"]),
+    ("appendices",       ["appendix_a_delimit.zip", "appendix_b_delimit.zip", "appendix_c_delimit.zip"],
+                                                             load_appendices,         ["area_block_to_field", "lease_to_field", "operator_to_field"]),
+    ("leases",           ["lease_data_fixed.zip"],           load_leases,             ["leases"]),
+    ("lease_list",       ["lease_list_fixed.zip"],           load_lease_list,         ["lease_list"]),
+    ("lease_owners",     ["lease_owner_op_delimit.zip"],     load_lease_owners,       ["lease_owners"]),
+    ("platforms",        ["platform_master_fixed.zip"],      load_platforms,          ["platforms"]),
+    ("platform_structs", ["platform_structure_fixed.zip"],   load_platform_structures,["platform_structures"]),
+    ("platform_locs",    ["platform_location_fixed.zip"],    load_platform_locations, ["platform_locations"]),
+    ("platform_approvals",["platform_approvals_delimit.zip"],load_platform_approvals,["platform_approvals"]),
+    ("platform_removals",["platform_removed_delimit.zip"],   load_platform_removals,  ["platform_removals"]),
+    ("wells",            ["borehole_delimit.zip"],           load_wells,              ["wells"]),
+    ("apd",              ["eWellAPDRawData.zip"],            load_apd,               ["apd"]),
+    ("apd_casing",       ["eWellAPDRawData.zip"],            load_apd_casing,        ["apd_casing_intervals", "apd_casing_sections"]),
+    ("apd_geologic",     ["eWellAPDRawData.zip"],            load_apd_geologic,      ["apd_geologic"]),
+    ("apm",              ["eWellAPMRawData.zip"],            load_apm,               ["apm"]),
+    ("apm_sub_data",     ["eWellAPMRawData.zip"],            load_apm_sub_data,      ["apm_preventers", "apm_suboperations"]),
+    ("pipelines",        ["pipeline_master_delimit.zip"],    load_pipelines,          ["pipelines"]),
+    ("pipeline_locs",    ["pipeline_location_delimit.zip"],  load_pipeline_locations, ["pipeline_locations"]),
+]
+
+
 def main():
+    parser = argparse.ArgumentParser(description="BOEM Relational Database Builder")
+    parser.add_argument("--full", action="store_true",
+                        help="Full rebuild (delete existing DB and start fresh)")
+    args = parser.parse_args()
+
     print("=" * 60)
     print("BOEM Relational Database Builder")
     print("=" * 60)
@@ -1982,10 +2145,13 @@ def main():
     # Extract zip files
     extract_if_needed()
 
-    # Remove old database if it exists
-    if DB_PATH.exists():
+    full_rebuild = args.full or not DB_PATH.exists()
+
+    if full_rebuild and DB_PATH.exists():
         DB_PATH.unlink()
-        print(f"Removed existing database: {DB_PATH}")
+        print("Removed existing database (full rebuild)")
+    elif not full_rebuild:
+        print("Incremental mode — only reloading changed data sources")
 
     conn = sqlite3.connect(str(DB_PATH))
     conn.execute("PRAGMA journal_mode=WAL")
@@ -1994,69 +2160,44 @@ def main():
 
     try:
         create_schema(conn)
+        init_build_meta(conn)
         conn.commit()
 
-        # Load reference tables first
-        load_companies(conn)
-        conn.commit()
-        load_rigs(conn)
-        conn.commit()
+        skipped = 0
+        loaded = 0
 
-        # Load field/reserves data
-        load_fields(conn)
-        conn.commit()
-        load_field_production(conn)
-        conn.commit()
-        load_appendices(conn)
-        conn.commit()
+        for meta_key, zip_names, loader_fn, tables in LOADER_MAP:
+            zip_paths = [RAW_DIR / z for z in zip_names]
+            checksum = file_checksum(*zip_paths)
 
-        # Load leasing data
-        load_leases(conn)
-        conn.commit()
-        load_lease_list(conn)
-        conn.commit()
-        load_lease_owners(conn)
-        conn.commit()
+            if not full_rebuild and checksum and not source_changed(conn, meta_key, checksum):
+                skipped += 1
+                continue
 
-        # Load platform data
-        load_platforms(conn)
-        conn.commit()
-        load_platform_structures(conn)
-        conn.commit()
-        load_platform_locations(conn)
-        conn.commit()
-        load_platform_approvals(conn)
-        conn.commit()
-        load_platform_removals(conn)
-        conn.commit()
+            # Clear target tables before reloading
+            for table in tables:
+                conn.execute(f'DELETE FROM "{table}"')
 
-        # Load well data
-        load_wells(conn)
-        conn.commit()
-        load_apd(conn)
-        conn.commit()
-        load_apd_casing(conn)
-        conn.commit()
-        load_apd_geologic(conn)
-        conn.commit()
-        load_apm(conn)
-        conn.commit()
-        load_apm_sub_data(conn)
-        conn.commit()
+            loader_fn(conn)
+            if checksum:
+                mark_built(conn, meta_key, checksum)
+            conn.commit()
+            loaded += 1
 
-        # Load pipeline data
-        load_pipelines(conn)
-        conn.commit()
-        load_pipeline_locations(conn)
-        conn.commit()
+        # Production — handled separately (per-year incremental)
+        if full_rebuild:
+            conn.execute("DELETE FROM production")
+            load_production(conn)
+            conn.commit()
+        else:
+            load_production_incremental(conn)
 
-        # Load production data (largest dataset)
-        load_production(conn)
-        conn.commit()
-
-        # Create views
+        # Create views (always — they're cheap)
         create_views(conn)
         conn.commit()
+
+        if not full_rebuild:
+            print(f"\n  {loaded} data sources reloaded, {skipped} unchanged (skipped)")
 
         # Print summary
         print_summary(conn)

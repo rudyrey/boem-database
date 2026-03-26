@@ -78,13 +78,25 @@ download_file() {
   local url="$2"
   local desc="$3"
 
-  if curl -fSL --retry 3 --retry-delay 5 -o "$dest" "$url" 2>/dev/null; then
+  # Use -z to skip download if local file is newer than remote (conditional GET)
+  if [ -f "$dest" ]; then
+    local http_code
+    http_code=$(curl -fSL --retry 3 --retry-delay 5 -z "$dest" -o "$dest" -w "%{http_code}" "$url" 2>/dev/null) || true
+    if [ "$http_code" = "304" ]; then
+      log "    $(basename "$dest") (unchanged)"
+      return 0
+    fi
+  else
+    curl -fSL --retry 3 --retry-delay 5 -o "$dest" "$url" 2>/dev/null || true
+  fi
+
+  if [ -f "$dest" ] && [ -s "$dest" ]; then
     local size
     size=$(du -h "$dest" | cut -f1)
-    log "  $(basename "$dest") (${size})"
+    log "    $(basename "$dest") (${size})"
     return 0
   else
-    log "  FAILED: $(basename "$dest")"
+    log "    FAILED: $(basename "$dest")"
     return 1
   fi
 }
@@ -159,11 +171,15 @@ extract_all() {
 
 build_database() {
   log "=========================================="
-  log "Building database"
+  log "Building database${FULL_REBUILD:+ (full rebuild)}"
   log "=========================================="
   extract_all
   cd "$SCRIPT_DIR"
-  python3 build_database.py
+  if [ "${FULL_REBUILD:-}" = "1" ]; then
+    python3 build_database.py --full
+  else
+    python3 build_database.py
+  fi
 }
 
 create_release() {
@@ -240,11 +256,15 @@ BOEM Database Updater
 Downloads raw data from BOEM/BSEE data centers, rebuilds the SQLite
 database, and optionally publishes it as a GitHub release.
 
+Incremental by default — only downloads changed files (HTTP conditional
+GET) and only reloads tables whose source data has changed.
+
 Usage:
-  ./update_database.sh              Download all data + rebuild database
+  ./update_database.sh              Download + incremental rebuild
   ./update_database.sh --download   Download only (skip rebuild)
-  ./update_database.sh --build      Rebuild only (from existing files)
-  ./update_database.sh --release    Download + rebuild + create GitHub release
+  ./update_database.sh --build      Incremental rebuild from existing files
+  ./update_database.sh --full       Download + full rebuild from scratch
+  ./update_database.sh --release    Download + incremental rebuild + GitHub release
   ./update_database.sh --help       Show this help
 
 Data sources:
@@ -264,6 +284,7 @@ EOF
 case "${1:-all}" in
   --download|-d)  download_all ;;
   --build|-b)     build_database ;;
+  --full|-f)      download_all; FULL_REBUILD=1 build_database ;;
   --release|-r)   download_all; build_database; create_release ;;
   --help|-h)      show_help ;;
   all|"")         download_all; build_database ;;
