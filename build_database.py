@@ -18,6 +18,7 @@ Data sources:
   - Field Names (delimited)
   - Field Production (delimited)
   - OGOR-A Production (delimited, 1996-2025)
+  - Production by Platform (delimited)
   - Rig ID List (delimited)
   - APD / Permits to Drill (delimited)
   - Lease List (fixed-width)
@@ -718,6 +719,26 @@ def create_schema(conn):
         work_commences_date TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS production_by_platform (
+        complex_id_num      INTEGER,
+        structure_number    TEXT,
+        area_code           TEXT,
+        block_number        TEXT,
+        lease_number        TEXT,
+        structure_name      TEXT,
+        install_date        TEXT,
+        removal_date        TEXT,
+        operator            TEXT,
+        operator_num        TEXT,
+        production_date     TEXT,
+        producing_wells     INTEGER,
+        bopd                REAL,
+        mcfpd               REAL,
+        boepd               REAL,
+        bwpd                REAL,
+        region_code         TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS production (
         lease_number        TEXT,
         completion_name     TEXT,
@@ -776,6 +797,11 @@ def create_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_apm_api ON apm(api_well_number);
     CREATE INDEX IF NOT EXISTS idx_apm_preventers_fk ON apm_preventers(sn_apm_fk);
     CREATE INDEX IF NOT EXISTS idx_apm_suboperations_fk ON apm_suboperations(sn_apm_fk);
+
+    CREATE INDEX IF NOT EXISTS idx_prod_plat_complex ON production_by_platform(complex_id_num);
+    CREATE INDEX IF NOT EXISTS idx_prod_plat_area ON production_by_platform(area_code, block_number);
+    CREATE INDEX IF NOT EXISTS idx_prod_plat_date ON production_by_platform(production_date);
+    CREATE INDEX IF NOT EXISTS idx_prod_plat_lease ON production_by_platform(lease_number);
 
     CREATE INDEX IF NOT EXISTS idx_production_lease ON production(lease_number);
     CREATE INDEX IF NOT EXISTS idx_production_api ON production(api_well_number);
@@ -2103,6 +2129,63 @@ def load_production_incremental(conn):
     print(f"  -> {total_loaded:,} production records loaded")
 
 
+def load_production_by_platform(conn):
+    """Load production-by-platform data (BSEE)."""
+    print("Loading production by platform...")
+
+    # The zip contains a subdirectory — find the txt file
+    src = EXTRACTED_DIR / "mv_prod_by_platform_all.txt"
+    if not src.exists():
+        # Try extracting from zip directly
+        zf = RAW_DIR / "ProdByPlatformRawData.zip"
+        if zf.exists():
+            import tempfile
+            tmpdir = tempfile.mkdtemp()
+            with zipfile.ZipFile(zf, "r") as z:
+                z.extractall(tmpdir)
+            # Flatten nested directory
+            for root, dirs, files in os.walk(tmpdir):
+                for f in files:
+                    if f.endswith(".txt"):
+                        import shutil
+                        shutil.move(os.path.join(root, f), str(EXTRACTED_DIR / f))
+            shutil.rmtree(tmpdir)
+
+    if not src.exists():
+        print("  WARNING: mv_prod_by_platform_all.txt not found, skipping")
+        return
+
+    rows = parse_delimited_file(str(src))
+    data = []
+    for r in rows:
+        if len(r) < 17:
+            continue
+        # Skip header row
+        if r[0] == "COMPLEX_ID_NUM":
+            continue
+        data.append((
+            to_int(r[0]),         # complex_id_num
+            s(r[1]),              # structure_number
+            s(r[2]),              # area_code
+            s(r[3]),              # block_number
+            s(r[4]),              # lease_number
+            s(r[5]),              # structure_name
+            parse_date_mdy(r[6]),  # install_date
+            parse_date_mdy(r[7]),  # removal_date
+            s(r[8]),              # operator
+            s(r[9]),              # operator_num
+            parse_date_mdy(r[10]),  # production_date
+            to_int(r[11]),        # producing_wells
+            to_float(r[12]),      # bopd
+            to_float(r[13]),      # mcfpd
+            to_float(r[14]),      # boepd
+            to_float(r[15]),      # bwpd
+            s(r[16]),             # region_code
+        ))
+    conn.executemany(f"INSERT INTO production_by_platform VALUES ({','.join('?' * 17)})", data)
+    print(f"  {len(data):,} records")
+
+
 # Map each loader to its source zip file(s) and the tables it populates.
 # Format: (meta_key, zip_filenames, loader_fn, tables_to_clear)
 LOADER_MAP = [
@@ -2129,6 +2212,7 @@ LOADER_MAP = [
     ("apm_sub_data",     ["eWellAPMRawData.zip"],            load_apm_sub_data,      ["apm_preventers", "apm_suboperations"]),
     ("pipelines",        ["pipeline_master_delimit.zip"],    load_pipelines,          ["pipelines"]),
     ("pipeline_locs",    ["pipeline_location_delimit.zip"],  load_pipeline_locations, ["pipeline_locations"]),
+    ("prod_by_platform", ["ProdByPlatformRawData.zip"],      load_production_by_platform, ["production_by_platform"]),
 ]
 
 

@@ -62,6 +62,9 @@ DOWNLOADS=(
   "appendix_a_delimit.zip|${BOEM}/Production/Files/appendix_a_delimit.zip|Appendix A (Area/Block to Field)"
   "appendix_b_delimit.zip|${BOEM}/Production/Files/appendix_b_delimit.zip|Appendix B (Lease to Field)"
   "appendix_c_delimit.zip|${BOEM}/Production/Files/appendix_c_delimit.zip|Appendix C (Operator to Field)"
+
+  # Production by Platform
+  "ProdByPlatformRawData.zip|${BSEE}/Production/Files/ProdByPlatformRawData.zip|Production by Platform"
 )
 
 # Production OGOR-A — one zip per year

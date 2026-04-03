@@ -74,9 +74,10 @@ export async function initPlatformsView(container, params = {}) {
     const detailEl = document.getElementById('plat-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
-    const [data, wellsRes] = await Promise.all([
+    const [data, wellsRes, prodRes] = await Promise.all([
       apiGet(`/platforms/${id}`),
       apiGet(`/platforms/${id}/wells`),
+      apiGet(`/platforms/${id}/production`),
     ]);
 
     const flags = [
@@ -140,6 +141,23 @@ export async function initPlatformsView(container, params = {}) {
                 </tr>`).join('')}</tbody>
               </table>
               ${wellsRes.data.length > 20 ? `<p style="padding:6px 0;font-size:11px;color:var(--color-text-muted)">Showing 20 of ${wellsRes.data.length}</p>` : ''}
+            </div>
+          ` : ''}
+          ${prodRes.data.length > 0 ? `
+            <div class="kv-section">
+              <div class="kv-section-title">Production History (${prodRes.data.length} months)</div>
+              <table class="detail-subtable">
+                <thead><tr><th>Date</th><th>Wells</th><th>BOPD</th><th>MCFPD</th><th>BOEPD</th><th>BWPD</th></tr></thead>
+                <tbody>${prodRes.data.slice(0, 60).map(p => `<tr>
+                  <td>${formatDate(p.production_date)}</td>
+                  <td>${p.producing_wells ?? '—'}</td>
+                  <td class="cell-number">${formatNumber(p.bopd)}</td>
+                  <td class="cell-number">${formatNumber(p.mcfpd)}</td>
+                  <td class="cell-number">${formatNumber(p.boepd)}</td>
+                  <td class="cell-number">${formatNumber(p.bwpd)}</td>
+                </tr>`).join('')}</tbody>
+              </table>
+              ${prodRes.data.length > 60 ? `<p style="padding:6px 0;font-size:11px;color:var(--color-text-muted)">Showing 60 of ${prodRes.data.length} months</p>` : ''}
             </div>
           ` : ''}
         </div>

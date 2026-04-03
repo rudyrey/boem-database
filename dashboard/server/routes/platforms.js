@@ -116,6 +116,22 @@ router.get('/:id', (req, res) => {
   res.json({ ...platform, structures, locations });
 });
 
+// GET /api/platforms/:id/production — monthly production by platform
+router.get('/:id/production', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT production_date, producing_wells, bopd, mcfpd, boepd, bwpd,
+             operator, lease_number, structure_name, structure_number
+      FROM production_by_platform
+      WHERE complex_id_num = @id
+      ORDER BY production_date DESC
+    `).all({ id: req.params.id });
+    res.json({ data: rows });
+  } catch (e) {
+    res.json({ data: [] });
+  }
+});
+
 // GET /api/platforms/:id/wells — wells on the same lease as this platform
 router.get('/:id/wells', (req, res) => {
   const platform = db.prepare(
