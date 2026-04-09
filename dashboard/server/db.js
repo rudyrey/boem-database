@@ -4,11 +4,11 @@ const Database = require('better-sqlite3');
 const DB_PATH = path.join(__dirname, '../../boem.db');
 const db = new Database(DB_PATH, { readonly: true });
 
-// Performance pragmas
-db.pragma('journal_mode = WAL');
+// Performance pragmas (skip WAL on readonly DBs)
+try { db.pragma('journal_mode = WAL'); } catch {}
 db.pragma('cache_size = -64000');   // 64MB
 db.pragma('mmap_size = 268435456'); // 256MB mmap
-db.pragma('temp_store = MEMORY');
+try { db.pragma('temp_store = MEMORY'); } catch {}
 
 // Startup cache — precomputed stats for instant dashboard loads
 const cache = {};
