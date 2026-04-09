@@ -20,6 +20,7 @@ Data sources:
   - OGOR-A Production (delimited, 1996-2025)
   - Production by Platform (delimited)
   - End of Operations Reports / EOR (delimited)
+  - Well Activity Reports / WAR (delimited)
   - Rig ID List (delimited)
   - APD / Permits to Drill (delimited)
   - Lease List (fixed-width)
@@ -803,6 +804,67 @@ def create_schema(conn):
         perf_base_md        REAL
     );
 
+    -- ========================================================
+    -- WELL ACTIVITY REPORTS (WAR)
+    -- ========================================================
+
+    CREATE TABLE IF NOT EXISTS war (
+        sn_war              INTEGER PRIMARY KEY,
+        war_start_dt        TEXT,
+        war_end_dt          TEXT,
+        contact_name        TEXT,
+        phone_number        TEXT,
+        rig_name            TEXT,
+        water_depth         REAL,
+        rkb_elevation       REAL,
+        bop_test_date       TEXT,
+        ram_tst_prss        REAL,
+        annular_tst_prss    REAL,
+        bus_asc_name        TEXT,
+        company_num         TEXT,
+        api_well_number     TEXT,
+        well_name           TEXT,
+        well_nm_bp_sfix     TEXT,
+        well_nm_st_sfix     TEXT,
+        surf_lease_num      TEXT,
+        surf_area_code      TEXT,
+        surf_block_num      TEXT,
+        botm_lease_num      TEXT,
+        botm_area_code      TEXT,
+        botm_block_num      TEXT,
+        well_activity_cd    TEXT,
+        well_actv_start_dt  TEXT,
+        well_actv_end_dt    TEXT,
+        total_depth_date    TEXT,
+        drilling_md         REAL,
+        drilling_tvd        REAL,
+        drill_fluid_wgt     REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS war_boreholes (
+        api_well_number     TEXT,
+        botm_lease_num      TEXT,
+        well_spud_date      TEXT,
+        total_depth_date    TEXT,
+        borehole_stat_dt    TEXT,
+        bh_total_md         REAL,
+        well_bore_tvd       REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS war_tubulars (
+        sn_war_fk           INTEGER,
+        csng_intv_type_cd   TEXT,
+        csng_hole_size      TEXT,
+        casing_size         TEXT,
+        casing_weight       REAL,
+        casing_grade        TEXT,
+        csng_liner_test_prss REAL,
+        csng_shoe_test_prss REAL,
+        csng_cement_vol     REAL,
+        csng_setting_top_md REAL,
+        csng_setting_botm_md REAL
+    );
+
     CREATE TABLE IF NOT EXISTS production_by_platform (
         complex_id_num      INTEGER,
         structure_number    TEXT,
@@ -881,6 +943,14 @@ def create_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_apm_api ON apm(api_well_number);
     CREATE INDEX IF NOT EXISTS idx_apm_preventers_fk ON apm_preventers(sn_apm_fk);
     CREATE INDEX IF NOT EXISTS idx_apm_suboperations_fk ON apm_suboperations(sn_apm_fk);
+
+    CREATE INDEX IF NOT EXISTS idx_war_api ON war(api_well_number);
+    CREATE INDEX IF NOT EXISTS idx_war_rig ON war(rig_name);
+    CREATE INDEX IF NOT EXISTS idx_war_start ON war(war_start_dt);
+    CREATE INDEX IF NOT EXISTS idx_war_area ON war(botm_area_code, botm_block_num);
+    CREATE INDEX IF NOT EXISTS idx_war_company ON war(company_num);
+    CREATE INDEX IF NOT EXISTS idx_war_boreholes_api ON war_boreholes(api_well_number);
+    CREATE INDEX IF NOT EXISTS idx_war_tubulars_fk ON war_tubulars(sn_war_fk);
 
     CREATE INDEX IF NOT EXISTS idx_eor_api ON eor(api_well_number);
     CREATE INDEX IF NOT EXISTS idx_eor_lease ON eor(botm_lease_number);
@@ -2223,6 +2293,136 @@ def load_production_incremental(conn):
     print(f"  -> {total_loaded:,} production records loaded")
 
 
+def load_war(conn):
+    """Load Well Activity Reports (merged main + props)."""
+    print("Loading WAR data...")
+
+    main_path = EXTRACTED_DIR / "mv_war_main.txt"
+    prop_path = EXTRACTED_DIR / "mv_war_main_prop.txt"
+
+    if not main_path.exists():
+        print("  WARNING: mv_war_main.txt not found, skipping")
+        return
+
+    # Build props lookup: sn_war -> (activity_cd, actv_start, actv_end, td_date, drill_md, drill_tvd, fluid_wgt)
+    props = {}
+    if prop_path.exists():
+        for r in parse_delimited_file(str(prop_path)):
+            if len(r) < 9 or r[0] == "SN_WAR":
+                continue
+            props[s(r[0])] = (
+                s(r[4]),              # well_activity_cd
+                parse_date_mdy(r[2]), # well_actv_start_dt
+                parse_date_mdy(r[5]), # well_actv_end_dt
+                parse_date_mdy(r[3]), # total_depth_date
+                to_float(r[6]),       # drilling_md
+                to_float(r[7]),       # drilling_tvd
+                to_float(r[8]),       # drill_fluid_wgt
+            )
+
+    rows = parse_delimited_file(str(main_path))
+    data = []
+    for r in rows:
+        if len(r) < 23 or r[0] == "SN_WAR":
+            continue
+        sn = s(r[0])
+        prop = props.get(sn, (None, None, None, None, None, None, None))
+        data.append((
+            to_int(r[0]),             # sn_war
+            parse_date_mdy(r[1]),     # war_start_dt
+            parse_date_mdy(r[2]),     # war_end_dt
+            s(r[3]),                  # contact_name
+            s(r[4]),                  # phone_number
+            s(r[5]),                  # rig_name
+            to_float(r[6]),           # water_depth
+            to_float(r[7]),           # rkb_elevation
+            parse_date_mdy(r[8]),     # bop_test_date
+            to_float(r[9]),           # ram_tst_prss
+            to_float(r[10]),          # annular_tst_prss
+            s(r[11]),                 # bus_asc_name
+            s(r[12]),                 # company_num
+            s(r[13]),                 # api_well_number
+            s(r[14]),                 # well_name
+            s(r[15]),                 # well_nm_bp_sfix
+            s(r[16]),                 # well_nm_st_sfix
+            s(r[17]),                 # surf_lease_num
+            s(r[18]),                 # surf_area_code
+            s(r[19]),                 # surf_block_num
+            s(r[20]),                 # botm_lease_num
+            s(r[21]),                 # botm_area_code
+            s(r[22]),                 # botm_block_num
+            prop[0],                  # well_activity_cd
+            prop[1],                  # well_actv_start_dt
+            prop[2],                  # well_actv_end_dt
+            prop[3],                  # total_depth_date
+            prop[4],                  # drilling_md
+            prop[5],                  # drilling_tvd
+            prop[6],                  # drill_fluid_wgt
+        ))
+    conn.executemany(f"INSERT INTO war VALUES ({','.join('?' * 30)})", data)
+    print(f"  {len(data):,} WAR records")
+
+
+def load_war_sub_data(conn):
+    """Load WAR sub-tables: boreholes and tubular summaries."""
+    print("Loading WAR sub-data...")
+
+    # Boreholes
+    bh_path = EXTRACTED_DIR / "mv_war_boreholes_view.txt"
+    if bh_path.exists():
+        rows = parse_delimited_file(str(bh_path))
+        data = []
+        for r in rows:
+            if len(r) < 7 or r[0] == "API_WELL_NUMBER":
+                continue
+            data.append((
+                s(r[0]),              # api_well_number
+                s(r[1]),              # botm_lease_num
+                parse_date_mdy(r[2]), # well_spud_date
+                parse_date_mdy(r[3]), # total_depth_date
+                parse_date_mdy(r[4]), # borehole_stat_dt
+                to_float(r[5]),       # bh_total_md
+                to_float(r[6]),       # well_bore_tvd
+            ))
+        conn.executemany(f"INSERT INTO war_boreholes VALUES ({','.join('?' * 7)})", data)
+        print(f"  war_boreholes: {len(data):,}")
+
+    # Tubular summaries (merge with prop for setting depths)
+    tub_path = EXTRACTED_DIR / "mv_war_tubular_summaries.txt"
+    tub_prop_path = EXTRACTED_DIR / "mv_war_tubular_summaries_prop.txt"
+    if tub_path.exists():
+        # Build props lookup: sn_war_csng_intv -> (top_md, botm_md)
+        tub_props = {}
+        if tub_prop_path.exists():
+            for r in parse_delimited_file(str(tub_prop_path)):
+                if len(r) < 4 or r[0] == "SN_WAR_CSNG_INTV_FK":
+                    continue
+                tub_props[s(r[0])] = (to_float(r[3]), to_float(r[2]))  # top_md, botm_md
+
+        rows = parse_delimited_file(str(tub_path))
+        data = []
+        for r in rows:
+            if len(r) < 10 or r[0] == "SN_WAR_FK":
+                continue
+            sn_intv = s(r[9]) if len(r) > 9 else None
+            prop = tub_props.get(sn_intv, (None, None))
+            data.append((
+                to_int(r[0]),         # sn_war_fk
+                s(r[1]),              # csng_intv_type_cd
+                s(r[2]),              # csng_hole_size
+                s(r[3]),              # casing_size
+                to_float(r[4]),       # casing_weight
+                s(r[5]),              # casing_grade
+                to_float(r[6]),       # csng_liner_test_prss
+                to_float(r[7]),       # csng_shoe_test_prss
+                to_float(r[8]),       # csng_cement_vol
+                prop[0],              # csng_setting_top_md
+                prop[1],              # csng_setting_botm_md
+            ))
+        conn.executemany(f"INSERT INTO war_tubulars VALUES ({','.join('?' * 11)})", data)
+        print(f"  war_tubulars: {len(data):,}")
+
+
 def load_eor(conn):
     """Load End of Operations Report main records (merged with location/depth props)."""
     print("Loading EOR data...")
@@ -2457,6 +2657,8 @@ LOADER_MAP = [
     ("prod_by_platform", ["ProdByPlatformRawData.zip"],      load_production_by_platform, ["production_by_platform"]),
     ("eor",              ["eWellEORRawData.zip"],             load_eor,                ["eor"]),
     ("eor_sub_data",     ["eWellEORRawData.zip"],             load_eor_sub_data,       ["eor_completions", "eor_cut_casings", "eor_geomarkers", "eor_hc_intervals", "eor_perf_intervals"]),
+    ("war",              ["eWellWARRawData.zip"],             load_war,                ["war"]),
+    ("war_sub_data",     ["eWellWARRawData.zip"],             load_war_sub_data,       ["war_boreholes", "war_tubulars"]),
 ]
 
 

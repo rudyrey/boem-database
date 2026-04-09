@@ -205,6 +205,22 @@ router.get('/:id/apms', (req, res) => {
   }
 });
 
+// GET /api/wells/:id/war — well activity reports for one well
+router.get('/:id/war', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT sn_war, war_start_dt, war_end_dt, rig_name,
+             well_activity_cd, water_depth, drilling_md
+      FROM war
+      WHERE api_well_number = @id
+      ORDER BY war_start_dt DESC
+    `).all({ id: req.params.id });
+    res.json({ data: rows });
+  } catch (err) {
+    res.json({ data: [] });
+  }
+});
+
 // GET /api/wells/:id/eor — end of operations reports for one well
 router.get('/:id/eor', (req, res) => {
   try {

@@ -189,13 +189,14 @@ export async function initWellsView(container, params = {}) {
     const detailEl = document.getElementById('well-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
-    const [well, prodRes, platRes, apdRes, apmRes, eorRes] = await Promise.all([
+    const [well, prodRes, platRes, apdRes, apmRes, eorRes, warRes] = await Promise.all([
       apiGet(`/wells/${encodeURIComponent(id)}`),
       apiGet(`/wells/${encodeURIComponent(id)}/production`),
       apiGet(`/wells/${encodeURIComponent(id)}/platforms`),
       apiGet(`/wells/${encodeURIComponent(id)}/apds`),
       apiGet(`/wells/${encodeURIComponent(id)}/apms`),
       apiGet(`/wells/${encodeURIComponent(id)}/eor`),
+      apiGet(`/wells/${encodeURIComponent(id)}/war`),
     ]);
 
     detailEl.innerHTML = `
@@ -280,6 +281,21 @@ export async function initWellsView(container, params = {}) {
                   <td class="cell-number">${formatDepth(e.total_md)}</td>
                 </tr>`).join('')}</tbody>
               </table>
+            </div>
+          ` : ''}
+          ${warRes.data.length > 0 ? `
+            <div class="kv-section">
+              <div class="kv-section-title">Activity Reports (${warRes.data.length})</div>
+              <table class="detail-subtable">
+                <thead><tr><th>Rig</th><th>Activity</th><th>Start</th><th>End</th></tr></thead>
+                <tbody>${warRes.data.slice(0, 20).map(w => `<tr class="clickable-row" onclick="window.location.hash='#/war/${w.sn_war}'">
+                  <td>${escapeHtml(w.rig_name || '—')}</td>
+                  <td>${escapeHtml(w.well_activity_cd || '—')}</td>
+                  <td>${formatDate(w.war_start_dt)}</td>
+                  <td>${formatDate(w.war_end_dt)}</td>
+                </tr>`).join('')}</tbody>
+              </table>
+              ${warRes.data.length > 20 ? `<p style="padding:6px 0;font-size:11px;color:var(--color-text-muted)">Showing 20 of ${warRes.data.length}</p>` : ''}
             </div>
           ` : ''}
           ${prodRes.data.length > 0 ? `

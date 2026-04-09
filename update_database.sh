@@ -37,6 +37,7 @@ DOWNLOADS=(
   "eWellAPDRawData.zip|${BSEE}/Well/Files/eWellAPDRawData.zip|eWell APD (Permit to Drill)"
   "eWellAPMRawData.zip|${BSEE}/Well/Files/eWellAPMRawData.zip|eWell APM (Permit to Modify)"
   "eWellEORRawData.zip|${BSEE}/Well/Files/eWellEORRawData.zip|eWell EOR (End of Operations)"
+  "eWellWARRawData.zip|${BSEE}/Well/Files/eWellWARRawData.zip|eWell WAR (Well Activity Reports)"
 
   # Companies
   "company_all_delimit.zip|${BOEM}/Company/Files/company_all_delimit.zip|Companies"
