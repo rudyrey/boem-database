@@ -19,6 +19,7 @@ Data sources:
   - Field Production (delimited)
   - OGOR-A Production (delimited, 1996-2025)
   - Production by Platform (delimited)
+  - End of Operations Reports / EOR (delimited)
   - Rig ID List (delimited)
   - APD / Permits to Drill (delimited)
   - Lease List (fixed-width)
@@ -719,6 +720,89 @@ def create_schema(conn):
         work_commences_date TEXT
     );
 
+    -- ========================================================
+    -- END OF OPERATIONS REPORTS (EOR)
+    -- ========================================================
+
+    CREATE TABLE IF NOT EXISTS eor (
+        sn_eor              INTEGER PRIMARY KEY,
+        operation_cd        TEXT,
+        api_well_number     TEXT,
+        well_name           TEXT,
+        well_nm_st_sfix     TEXT,
+        well_nm_bp_sfix     TEXT,
+        company_num         TEXT,
+        bus_asc_name        TEXT,
+        botm_lease_number   TEXT,
+        botm_area_code      TEXT,
+        botm_block_number   TEXT,
+        surf_lease_number   TEXT,
+        surf_area_code      TEXT,
+        surf_block_number   TEXT,
+        borehole_stat_cd    TEXT,
+        borehole_stat_dt    TEXT,
+        operational_narrative TEXT,
+        subsea_completion   TEXT,
+        subsea_protection   TEXT,
+        subsea_buoy         TEXT,
+        subsea_tree_height  REAL,
+        obstruction_protection TEXT,
+        obstruction_type_cd TEXT,
+        obstruction_buoy    TEXT,
+        obstruction_height  REAL,
+        botm_longitude      REAL,
+        botm_latitude       REAL,
+        total_md            REAL,
+        well_bore_tvd       REAL,
+        kickoff_md          REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS eor_completions (
+        sn_eor_fk           INTEGER,
+        sn_eor_well_comp    INTEGER,
+        interval            TEXT,
+        comp_lease_number   TEXT,
+        comp_area_code      TEXT,
+        comp_block_number   TEXT,
+        comp_status_cd      TEXT,
+        comp_latitude       REAL,
+        comp_longitude      REAL,
+        comp_rsvr_name      TEXT,
+        comp_interval_name  TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS eor_cut_casings (
+        sn_eor_fk           INTEGER,
+        casing_size         TEXT,
+        casing_cut_date     TEXT,
+        casing_cut_method   TEXT,
+        casing_cut_depth    REAL,
+        casing_cut_mdl_ind  TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS eor_geomarkers (
+        sn_eor_fk           INTEGER,
+        geo_marker_name     TEXT,
+        top_md              REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS eor_hc_intervals (
+        sn_hc_bearing_intvl INTEGER,
+        sn_eor_fk           INTEGER,
+        interval_name       TEXT,
+        top_md              REAL,
+        bottom_md           REAL,
+        hydrocarbon_type_cd TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS eor_perf_intervals (
+        sn_eor_well_comp_fk INTEGER,
+        perf_top_md         REAL,
+        perf_botm_tvd       REAL,
+        perf_top_tvd        REAL,
+        perf_base_md        REAL
+    );
+
     CREATE TABLE IF NOT EXISTS production_by_platform (
         complex_id_num      INTEGER,
         structure_number    TEXT,
@@ -797,6 +881,16 @@ def create_schema(conn):
     CREATE INDEX IF NOT EXISTS idx_apm_api ON apm(api_well_number);
     CREATE INDEX IF NOT EXISTS idx_apm_preventers_fk ON apm_preventers(sn_apm_fk);
     CREATE INDEX IF NOT EXISTS idx_apm_suboperations_fk ON apm_suboperations(sn_apm_fk);
+
+    CREATE INDEX IF NOT EXISTS idx_eor_api ON eor(api_well_number);
+    CREATE INDEX IF NOT EXISTS idx_eor_lease ON eor(botm_lease_number);
+    CREATE INDEX IF NOT EXISTS idx_eor_area ON eor(botm_area_code, botm_block_number);
+    CREATE INDEX IF NOT EXISTS idx_eor_company ON eor(company_num);
+    CREATE INDEX IF NOT EXISTS idx_eor_completions_fk ON eor_completions(sn_eor_fk);
+    CREATE INDEX IF NOT EXISTS idx_eor_cut_casings_fk ON eor_cut_casings(sn_eor_fk);
+    CREATE INDEX IF NOT EXISTS idx_eor_geomarkers_fk ON eor_geomarkers(sn_eor_fk);
+    CREATE INDEX IF NOT EXISTS idx_eor_hc_intervals_fk ON eor_hc_intervals(sn_eor_fk);
+    CREATE INDEX IF NOT EXISTS idx_eor_perf_intervals_fk ON eor_perf_intervals(sn_eor_well_comp_fk);
 
     CREATE INDEX IF NOT EXISTS idx_prod_plat_complex ON production_by_platform(complex_id_num);
     CREATE INDEX IF NOT EXISTS idx_prod_plat_area ON production_by_platform(area_code, block_number);
@@ -2129,6 +2223,154 @@ def load_production_incremental(conn):
     print(f"  -> {total_loaded:,} production records loaded")
 
 
+def load_eor(conn):
+    """Load End of Operations Report main records (merged with location/depth props)."""
+    print("Loading EOR data...")
+
+    main_path = EXTRACTED_DIR / "mv_eor_mainquery.txt"
+    prop_path = EXTRACTED_DIR / "mv_eor_mainquery_prop.txt"
+
+    if not main_path.exists():
+        print("  WARNING: mv_eor_mainquery.txt not found, skipping")
+        return
+
+    # Build props lookup: sn_eor -> (lon, lat, total_md, tvd, kickoff_md)
+    props = {}
+    if prop_path.exists():
+        for r in parse_delimited_file(str(prop_path)):
+            if len(r) < 6 or r[0] == "SN_EOR":
+                continue
+            props[s(r[0])] = (to_float(r[1]), to_float(r[2]), to_float(r[3]), to_float(r[4]), to_float(r[5]))
+
+    rows = parse_delimited_file(str(main_path))
+    data = []
+    for r in rows:
+        if len(r) < 25 or r[0] == "SN_EOR":
+            continue
+        sn = s(r[0])
+        prop = props.get(sn, (None, None, None, None, None))
+        data.append((
+            to_int(r[0]),         # sn_eor
+            s(r[1]),              # operation_cd
+            s(r[2]),              # api_well_number
+            s(r[3]),              # well_name
+            s(r[4]),              # well_nm_st_sfix
+            s(r[5]),              # well_nm_bp_sfix
+            s(r[6]),              # company_num
+            s(r[7]),              # bus_asc_name
+            s(r[8]),              # botm_lease_number
+            s(r[9]),              # botm_area_code
+            s(r[10]),             # botm_block_number
+            s(r[11]),             # surf_lease_number
+            s(r[12]),             # surf_area_code
+            s(r[13]),             # surf_block_number
+            s(r[14]),             # borehole_stat_cd
+            parse_date_mdy(r[15]),  # borehole_stat_dt
+            s(r[16]),             # operational_narrative
+            s(r[17]),             # subsea_completion
+            s(r[18]),             # subsea_protection
+            s(r[19]),             # subsea_buoy
+            to_float(r[20]),      # subsea_tree_height
+            s(r[21]),             # obstruction_protection
+            s(r[22]),             # obstruction_type_cd
+            s(r[23]),             # obstruction_buoy
+            to_float(r[24]),      # obstruction_height
+            prop[0],              # botm_longitude
+            prop[1],              # botm_latitude
+            prop[2],              # total_md
+            prop[3],              # well_bore_tvd
+            prop[4],              # kickoff_md
+        ))
+    conn.executemany(f"INSERT INTO eor VALUES ({','.join('?' * 30)})", data)
+    print(f"  {len(data):,} EOR records")
+
+
+def load_eor_sub_data(conn):
+    """Load EOR sub-tables: completions, cut casings, geomarkers, HC intervals, perforations."""
+    print("Loading EOR sub-data...")
+
+    # Completions (merge completions + completionsprop)
+    comp_path = EXTRACTED_DIR / "mv_eor_completions.txt"
+    comp_prop_path = EXTRACTED_DIR / "mv_eor_completionsprop.txt"
+    if comp_path.exists():
+        # Build props lookup: (sn_eor_fk, sn_eor_well_comp) -> (lat, lon, rsvr, interval)
+        comp_props = {}
+        if comp_prop_path.exists():
+            for r in parse_delimited_file(str(comp_prop_path)):
+                if len(r) < 6 or r[0] == "SN_EOR_FK":
+                    continue
+                key = (s(r[0]), s(r[1]))
+                comp_props[key] = (to_float(r[2]), to_float(r[3]), s(r[4]), s(r[5]))
+
+        rows = parse_delimited_file(str(comp_path))
+        data = []
+        for r in rows:
+            if len(r) < 7 or r[0] == "SN_EOR_FK":
+                continue
+            key = (s(r[0]), s(r[1]))
+            prop = comp_props.get(key, (None, None, None, None))
+            data.append((
+                to_int(r[0]), to_int(r[1]), s(r[2]), s(r[3]), s(r[4]), s(r[5]), s(r[6]),
+                prop[0], prop[1], prop[2], prop[3],
+            ))
+        conn.executemany(f"INSERT INTO eor_completions VALUES ({','.join('?' * 11)})", data)
+        print(f"  eor_completions: {len(data):,}")
+
+    # Cut casings
+    cc_path = EXTRACTED_DIR / "mv_eor_cut_casings.txt"
+    if cc_path.exists():
+        rows = parse_delimited_file(str(cc_path))
+        data = []
+        for r in rows:
+            if len(r) < 6 or r[0] == "SN_EOR_FK":
+                continue
+            data.append((
+                to_int(r[0]), s(r[1]), parse_date_mdy(r[2]), s(r[3]), to_float(r[4]), s(r[5]),
+            ))
+        conn.executemany(f"INSERT INTO eor_cut_casings VALUES ({','.join('?' * 6)})", data)
+        print(f"  eor_cut_casings: {len(data):,}")
+
+    # Geomarkers
+    geo_path = EXTRACTED_DIR / "mv_eor_geomarkers.txt"
+    if geo_path.exists():
+        rows = parse_delimited_file(str(geo_path))
+        data = []
+        for r in rows:
+            if len(r) < 3 or r[0] == "SN_EOR_FK":
+                continue
+            data.append((to_int(r[0]), s(r[1]), to_float(r[2])))
+        conn.executemany(f"INSERT INTO eor_geomarkers VALUES ({','.join('?' * 3)})", data)
+        print(f"  eor_geomarkers: {len(data):,}")
+
+    # HC-bearing intervals
+    hc_path = EXTRACTED_DIR / "mv_hcbearing_intervals.txt"
+    if hc_path.exists():
+        rows = parse_delimited_file(str(hc_path))
+        data = []
+        for r in rows:
+            if len(r) < 6 or r[0] == "SN_HC_BEARING_INTVL":
+                continue
+            data.append((
+                to_int(r[0]), to_int(r[1]), s(r[2]), to_float(r[3]), to_float(r[4]), s(r[5]),
+            ))
+        conn.executemany(f"INSERT INTO eor_hc_intervals VALUES ({','.join('?' * 6)})", data)
+        print(f"  eor_hc_intervals: {len(data):,}")
+
+    # Perforation intervals
+    perf_path = EXTRACTED_DIR / "mv_eor_perf_intervals.txt"
+    if perf_path.exists():
+        rows = parse_delimited_file(str(perf_path))
+        data = []
+        for r in rows:
+            if len(r) < 5 or r[0] == "SN_EOR_WELL_COMP_FK":
+                continue
+            data.append((
+                to_int(r[0]), to_float(r[1]), to_float(r[2]), to_float(r[3]), to_float(r[4]),
+            ))
+        conn.executemany(f"INSERT INTO eor_perf_intervals VALUES ({','.join('?' * 5)})", data)
+        print(f"  eor_perf_intervals: {len(data):,}")
+
+
 def load_production_by_platform(conn):
     """Load production-by-platform data (BSEE)."""
     print("Loading production by platform...")
@@ -2213,6 +2455,8 @@ LOADER_MAP = [
     ("pipelines",        ["pipeline_master_delimit.zip"],    load_pipelines,          ["pipelines"]),
     ("pipeline_locs",    ["pipeline_location_delimit.zip"],  load_pipeline_locations, ["pipeline_locations"]),
     ("prod_by_platform", ["ProdByPlatformRawData.zip"],      load_production_by_platform, ["production_by_platform"]),
+    ("eor",              ["eWellEORRawData.zip"],             load_eor,                ["eor"]),
+    ("eor_sub_data",     ["eWellEORRawData.zip"],             load_eor_sub_data,       ["eor_completions", "eor_cut_casings", "eor_geomarkers", "eor_hc_intervals", "eor_perf_intervals"]),
 ]
 
 

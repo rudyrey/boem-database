@@ -189,12 +189,13 @@ export async function initWellsView(container, params = {}) {
     const detailEl = document.getElementById('well-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
-    const [well, prodRes, platRes, apdRes, apmRes] = await Promise.all([
+    const [well, prodRes, platRes, apdRes, apmRes, eorRes] = await Promise.all([
       apiGet(`/wells/${encodeURIComponent(id)}`),
       apiGet(`/wells/${encodeURIComponent(id)}/production`),
       apiGet(`/wells/${encodeURIComponent(id)}/platforms`),
       apiGet(`/wells/${encodeURIComponent(id)}/apds`),
       apiGet(`/wells/${encodeURIComponent(id)}/apms`),
+      apiGet(`/wells/${encodeURIComponent(id)}/eor`),
     ]);
 
     detailEl.innerHTML = `
@@ -263,6 +264,20 @@ export async function initWellsView(container, params = {}) {
                   <td>${formatDate(m.acc_status_date)}</td>
                   <td>${formatDate(m.work_commences_date)}</td>
                   <td>${m.est_operation_days != null ? m.est_operation_days : '—'}</td>
+                </tr>`).join('')}</tbody>
+              </table>
+            </div>
+          ` : ''}
+          ${eorRes.data.length > 0 ? `
+            <div class="kv-section">
+              <div class="kv-section-title">End of Operations (${eorRes.data.length})</div>
+              <table class="detail-subtable">
+                <thead><tr><th>Operation</th><th>Status</th><th>Date</th><th>MD</th></tr></thead>
+                <tbody>${eorRes.data.map(e => `<tr class="clickable-row" onclick="window.location.hash='#/eor/${e.sn_eor}'">
+                  <td>${escapeHtml(e.operation_cd || '—')}</td>
+                  <td>${escapeHtml(e.borehole_stat_cd || '—')}</td>
+                  <td>${formatDate(e.borehole_stat_dt)}</td>
+                  <td class="cell-number">${formatDepth(e.total_md)}</td>
                 </tr>`).join('')}</tbody>
               </table>
             </div>

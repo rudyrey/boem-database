@@ -23,6 +23,7 @@ app.use('/api/production', require('./server/routes/production'));
 app.use('/api/companies', require('./server/routes/companies'));
 app.use('/api/fields', require('./server/routes/fields'));
 app.use('/api/submissions', require('./server/routes/submissions'));
+app.use('/api/eor', require('./server/routes/eor'));
 app.use('/api/search', require('./server/routes/search'));
 
 // Error handler

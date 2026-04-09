@@ -36,6 +36,7 @@ DOWNLOADS=(
   # eWell Submissions (from BSEE — updated daily)
   "eWellAPDRawData.zip|${BSEE}/Well/Files/eWellAPDRawData.zip|eWell APD (Permit to Drill)"
   "eWellAPMRawData.zip|${BSEE}/Well/Files/eWellAPMRawData.zip|eWell APM (Permit to Modify)"
+  "eWellEORRawData.zip|${BSEE}/Well/Files/eWellEORRawData.zip|eWell EOR (End of Operations)"
 
   # Companies
   "company_all_delimit.zip|${BOEM}/Company/Files/company_all_delimit.zip|Companies"

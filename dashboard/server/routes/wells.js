@@ -205,4 +205,20 @@ router.get('/:id/apms', (req, res) => {
   }
 });
 
+// GET /api/wells/:id/eor — end of operations reports for one well
+router.get('/:id/eor', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT sn_eor, operation_cd, borehole_stat_cd, borehole_stat_dt,
+             well_name, bus_asc_name, total_md, well_bore_tvd
+      FROM eor
+      WHERE api_well_number = @id
+      ORDER BY borehole_stat_dt DESC
+    `).all({ id: req.params.id });
+    res.json({ data: rows });
+  } catch (err) {
+    res.json({ data: [] });
+  }
+});
+
 module.exports = router;

@@ -56,6 +56,16 @@ import { showToast } from './core/toast.js';
     return initSubmissionsView(container, params);
   });
 
+  router.add('/eor', async () => {
+    const { initEorView } = await import('./views/eor-view.js');
+    return initEorView(container);
+  });
+
+  router.add('/eor/:sn', async (params) => {
+    const { initEorView } = await import('./views/eor-view.js');
+    return initEorView(container, params);
+  });
+
   router.add('/leases', async () => {
     const { initLeasesView } = await import('./views/leases-view.js');
     return initLeasesView(container);
