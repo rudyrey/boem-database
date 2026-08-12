@@ -1,5 +1,5 @@
 import { apiGet, getStats } from '../core/api.js';
-import { formatNumber, escapeHtml } from '../core/utils.js';
+import { formatNumber, escapeHtml, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { initSplitResizer } from '../components/split-resizer.js';
 import { ChartPanel, productionChartConfig } from '../components/chart-panel.js';
@@ -50,6 +50,10 @@ export async function initCompaniesView(container, params) {
 
   table.load();
 
+  // Guards must be initialized before the params?.id call below reaches the
+  // hoisted loadCompanyDetail
+  const detailGuard = latestGuard();
+
   // Direct navigation to a company
   if (params?.id) {
     loadCompanyDetail(params.id);
@@ -58,11 +62,13 @@ export async function initCompaniesView(container, params) {
   let detailChart = null;
 
   async function loadCompanyDetail(companyNum) {
+    const isCurrent = detailGuard();
     const panel = document.getElementById('company-detail');
     panel.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
     try {
       const c = await apiGet(`/companies/${companyNum}`);
+      if (!isCurrent()) return; // a newer selection superseded this one
 
       panel.innerHTML = `
         <div class="detail-header">
@@ -108,7 +114,9 @@ export async function initCompaniesView(container, params) {
     }
   }
 
+  const tabGuard = latestGuard();
   async function loadTab(companyNum, tab, page = 1) {
+    const isCurrent = tabGuard();
     const content = document.getElementById('company-tab-content');
     if (!content) return;
     content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
@@ -117,6 +125,7 @@ export async function initCompaniesView(container, params) {
 
     try {
       const res = await apiGet(`/companies/${companyNum}/${tab}`, { limit: pageSize, page });
+      if (!isCurrent()) return; // a newer tab/page selection superseded this one
       const rows = res.data;
       const total = res.pagination ? res.pagination.total : rows.length;
       const totalPages = res.pagination ? res.pagination.totalPages : 1;

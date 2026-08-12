@@ -1,6 +1,6 @@
 import { apiGet } from '../core/api.js';
 import { eventBus } from '../core/event-bus.js';
-import { escapeHtml, formatNumber, formatDepth, wellStatusBadge } from '../core/utils.js';
+import { escapeHtml, formatNumber, formatDepth, wellStatusBadge, latestGuard } from '../core/utils.js';
 import { MapController } from '../map/map-controller.js';
 import { PlatformLayer } from '../map/layers/platform-layer.js';
 import { WellLayer } from '../map/layers/well-layer.js';
@@ -17,21 +17,31 @@ export async function initMapView(container) {
   const mapCtrl = new MapController(document.getElementById('map-full'));
   const detailEl = document.getElementById('map-detail');
 
+  // One guard for the shared detail panel — clicking a second marker while
+  // the first is still loading must not let the slow response win
+  const detailGuard = latestGuard();
+
   // Platform layer
   const platformLayer = new PlatformLayer(mapCtrl.map, async (p) => {
+    const isCurrent = detailGuard();
     const detail = await apiGet(`/platforms/${p.complex_id}`);
+    if (!isCurrent()) return;
     showDetail('platform', detail);
   });
 
   // Well layer
   const wellLayer = new WellLayer(mapCtrl.map, async (w) => {
+    const isCurrent = detailGuard();
     const detail = await apiGet(`/wells/${w.api_well_number}`);
+    if (!isCurrent()) return;
     showDetail('well', detail);
   });
 
   // Pipeline layer
   const pipelineLayer = new PipelineLayer(mapCtrl.map, async (seg) => {
+    const isCurrent = detailGuard();
     const detail = await apiGet(`/pipelines/${seg.segment_num}`);
+    if (!isCurrent()) return;
     showDetail('pipeline', detail);
   });
 

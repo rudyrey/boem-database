@@ -1,5 +1,5 @@
 import { apiGet, getStats } from '../core/api.js';
-import { formatNumber, formatDate, formatDepth, escapeHtml, flagDot, wellStatusBadge } from '../core/utils.js';
+import { formatNumber, formatDate, formatDepth, escapeHtml, flagDot, wellStatusBadge, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { MiniMap } from '../components/mini-map.js';
 import { debounce } from '../core/utils.js';
@@ -70,7 +70,9 @@ export async function initPlatformsView(container, params = {}) {
 
   let detailMap = null;
 
+  const detailGuard = latestGuard();
   async function showPlatformDetail(id) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('plat-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -79,6 +81,7 @@ export async function initPlatformsView(container, params = {}) {
       apiGet(`/platforms/${id}/wells`),
       apiGet(`/platforms/${id}/production`),
     ]);
+    if (!isCurrent()) return; // a newer selection superseded this one
 
     const flags = [
       ['Oil', data.oil_producing], ['Gas', data.gas_producing], ['Water', data.water_producing],

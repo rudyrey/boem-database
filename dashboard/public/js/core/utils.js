@@ -48,6 +48,26 @@ export function throttle(fn, ms = 300) {
   };
 }
 
+/**
+ * Guards async UI updates against stale responses. Each call to the returned
+ * function marks a new "latest" operation and hands back an isCurrent() check:
+ *
+ *   const guard = latestGuard();
+ *   async function load() {
+ *     const isCurrent = guard();
+ *     const res = await apiGet(...);
+ *     if (!isCurrent()) return;   // a newer load() superseded this one
+ *     render(res);
+ *   }
+ */
+export function latestGuard() {
+  let current = 0;
+  return () => {
+    const id = ++current;
+    return () => id === current;
+  };
+}
+
 export function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -80,7 +100,7 @@ export function leaseStatusBadge(status) {
     'SOP': 'badge-warning', 'SOO': 'badge-warning', 'DSO': 'badge-warning',
     'RELINQ': 'badge-muted', 'EXPIR': 'badge-muted', 'TERMIN': 'badge-danger',
   };
-  return `<span class="badge ${map[s] || 'badge-muted'}">${s}</span>`;
+  return `<span class="badge ${map[s] || 'badge-muted'}">${escapeHtml(s)}</span>`;
 }
 
 export function flagDot(val) {

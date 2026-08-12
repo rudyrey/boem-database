@@ -1,5 +1,5 @@
 import { apiGet, getStats } from '../core/api.js';
-import { formatNumber, formatDate, escapeHtml, formatDepth } from '../core/utils.js';
+import { formatNumber, formatDate, escapeHtml, formatDepth, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { MiniMap } from '../components/mini-map.js';
 import { debounce } from '../core/utils.js';
@@ -71,7 +71,9 @@ export async function initPipelinesView(container, params = {}) {
 
   let detailMap = null;
 
+  const detailGuard = latestGuard();
   async function showDetail(id) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('pipe-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -79,6 +81,7 @@ export async function initPipelinesView(container, params = {}) {
       apiGet(`/pipelines/${id}`),
       apiGet(`/pipelines/${id}/geometry`),
     ]);
+    if (!isCurrent()) return; // a newer selection superseded this one
 
     detailEl.innerHTML = `
       <div class="detail-panel">

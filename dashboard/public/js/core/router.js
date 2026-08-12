@@ -6,6 +6,7 @@ export class Router {
   constructor() {
     this._routes = [];
     this._currentCleanup = null;
+    this._navToken = 0;
     window.addEventListener('hashchange', () => this._resolve());
   }
 
@@ -31,6 +32,7 @@ export class Router {
 
   async _resolve() {
     const hash = window.location.hash.slice(1) || '/dashboard';
+    const token = ++this._navToken;
 
     // Cleanup previous view
     if (this._currentCleanup) {
@@ -49,6 +51,12 @@ export class Router {
 
         try {
           const cleanup = await route.handler(params);
+          if (token !== this._navToken) {
+            // A newer navigation started while this handler was loading —
+            // tear down whatever it set up instead of adopting its cleanup.
+            if (typeof cleanup === 'function') cleanup();
+            return;
+          }
           if (typeof cleanup === 'function') this._currentCleanup = cleanup;
         } catch (e) {
           console.error('[Router] View error:', e);

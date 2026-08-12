@@ -1,4 +1,4 @@
-import { formatNumber } from '../core/utils.js';
+import { formatNumber, escapeHtml, latestGuard } from '../core/utils.js';
 
 /**
  * Server-paginated, sortable data table.
@@ -29,6 +29,7 @@ export class DataTable {
     this.pagination = { page: 1, limit: pageSize, total: 0, totalPages: 0 };
     this.selectedId = null;
     this.loading = false;
+    this._loadGuard = latestGuard();
 
     this._render();
   }
@@ -98,8 +99,10 @@ export class DataTable {
       return `<tr class="${cls}" data-idx="${idx}">
         ${this.columns.map(col => {
           let val = row[col.key];
+          // Columns without a format fn render raw data — escape it; format
+          // fns are trusted to return HTML and escape their own inputs.
           if (col.format) val = col.format(val, row);
-          else if (val == null) val = '—';
+          else val = val == null ? '—' : escapeHtml(String(val));
           const cellClass = col.className || '';
           return `<td class="${cellClass}">${val}</td>`;
         }).join('')}
@@ -163,13 +166,16 @@ export class DataTable {
   }
 
   async load() {
+    const isCurrent = this._loadGuard();
     this.loading = true;
     this._renderBody();
     try {
       const result = await this.fetchFn(this.page, this.pageSize, this.sort, this.order, this.filters);
+      if (!isCurrent()) return; // a newer load() superseded this one
       this.data = result.data.map((row, i) => ({ ...row, _id: i }));
       this.pagination = result.pagination;
     } catch (err) {
+      if (!isCurrent()) return;
       console.error('DataTable load error:', err);
       this.data = [];
       this.pagination = { page: 1, limit: this.pageSize, total: 0, totalPages: 0 };

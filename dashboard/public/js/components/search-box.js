@@ -1,9 +1,10 @@
 import { apiGet } from '../core/api.js';
-import { debounce, escapeHtml } from '../core/utils.js';
+import { debounce, escapeHtml, latestGuard } from '../core/utils.js';
 
 export class SearchBox {
   constructor(container) {
     this.container = container;
+    this._searchGuard = latestGuard();
     this._render();
   }
 
@@ -42,11 +43,13 @@ export class SearchBox {
   }
 
   async _search() {
+    const isCurrent = this._searchGuard();
     const q = this.input.value.trim();
     if (q.length < 2) { this.dropdown.style.display = 'none'; return; }
 
     try {
       const results = await apiGet('/search', { q, limit: 15 });
+      if (!isCurrent()) return; // superseded by newer keystrokes
       this._showResults(results);
     } catch (e) {
       console.error('Search error:', e);

@@ -1,5 +1,5 @@
 import { apiGet } from '../core/api.js';
-import { formatNumber, formatDate, formatDepth, escapeHtml } from '../core/utils.js';
+import { formatNumber, formatDate, formatDepth, escapeHtml, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { debounce } from '../core/utils.js';
 import { initSplitResizer } from '../components/split-resizer.js';
@@ -105,7 +105,9 @@ export async function initEorView(container, params = {}) {
     applyFilters();
   });
 
+  const detailGuard = latestGuard();
   async function showEorDetail(sn) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('eor-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -117,6 +119,7 @@ export async function initEorView(container, params = {}) {
       apiGet(`/eor/${sn}/hc-intervals`),
       apiGet(`/eor/${sn}/perforations`),
     ]);
+    if (!isCurrent()) return; // a newer selection superseded this one
 
     const opLabel = OP_LABELS[data.operation_cd] || data.operation_cd || '—';
 

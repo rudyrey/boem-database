@@ -1,5 +1,5 @@
 import { apiGet, getStats } from '../core/api.js';
-import { formatNumber, formatDate, leaseStatusBadge, wellStatusBadge, formatDepth, escapeHtml } from '../core/utils.js';
+import { formatNumber, formatDate, leaseStatusBadge, wellStatusBadge, formatDepth, escapeHtml, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { ChartPanel, productionChartConfig } from '../components/chart-panel.js';
 import { debounce } from '../core/utils.js';
@@ -67,7 +67,9 @@ export async function initLeasesView(container, params = {}) {
 
   let detailChart = null;
 
+  const detailGuard = latestGuard();
   async function showLeaseDetail(id) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('lease-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -78,6 +80,7 @@ export async function initLeasesView(container, params = {}) {
       apiGet(`/leases/${id}/wells`),
       apiGet(`/leases/${id}/platforms`),
     ]);
+    if (!isCurrent()) return; // a newer selection superseded this one
 
     detailEl.innerHTML = `
       <div class="detail-panel">

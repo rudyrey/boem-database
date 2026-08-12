@@ -1,5 +1,5 @@
 import { apiGet } from '../core/api.js';
-import { formatNumber, formatDate, formatDepth, escapeHtml } from '../core/utils.js';
+import { formatNumber, formatDate, formatDepth, escapeHtml, latestGuard } from '../core/utils.js';
 import { debounce } from '../core/utils.js';
 
 const ACTIVITY_LABELS = {
@@ -112,23 +112,28 @@ export async function initRigTimelineView(container, params = {}) {
   });
 
   // ---- Load data ----
+  const ganttGuard = latestGuard();
   async function loadGantt() {
+    const isCurrent = ganttGuard();
     const panel = document.getElementById('gantt-panel');
     panel.innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Loading...</div>';
 
     try {
-      ganttData = await apiGet('/rig-timeline/gantt', {
+      const data = await apiGet('/rig-timeline/gantt', {
         search: document.getElementById('rt-search').value || undefined,
         hide_generic: document.getElementById('rt-hide-generic').checked ? 'true' : undefined,
         date_from: document.getElementById('rt-date-from').value || undefined,
         date_to: document.getElementById('rt-date-to').value || undefined,
         rig_limit: 5000,
       });
+      if (!isCurrent()) return; // filters changed while loading
+      ganttData = data;
       // Reset operator colors on reload
       Object.keys(operatorColorMap).forEach(k => delete operatorColorMap[k]);
       opColorIdx = 0;
       renderGantt();
     } catch (e) {
+      if (!isCurrent()) return;
       panel.innerHTML = '<div class="loading-overlay">Failed to load data</div>';
     }
   }
@@ -302,6 +307,7 @@ export async function initRigTimelineView(container, params = {}) {
     const moreBtn = document.getElementById('gantt-more');
     if (moreBtn) {
       moreBtn.addEventListener('click', async () => {
+        const isCurrent = ganttGuard();
         try {
           moreBtn.textContent = 'Loading...';
           moreBtn.disabled = true;
@@ -313,6 +319,7 @@ export async function initRigTimelineView(container, params = {}) {
             rig_limit: 40,
             rig_offset: ganttData.rigs.length + (ganttData.rigOffset || 0),
           });
+          if (!isCurrent()) return; // filters changed while loading more
           ganttData.rigs.push(...moreData.rigs);
           if (moreData.dateRange.min && (!ganttData.dateRange.min || moreData.dateRange.min < ganttData.dateRange.min))
             ganttData.dateRange.min = moreData.dateRange.min;
@@ -534,7 +541,9 @@ export async function initRigTimelineView(container, params = {}) {
   }
 
   // ---- Detail panel ----
+  const detailGuard = latestGuard();
   async function showJobDetail(job, rigName) {
+    const isCurrent = detailGuard();
     const detail = document.getElementById('rt-detail');
     const days = durationDays(job.start_dt, job.end_dt);
 
@@ -592,6 +601,7 @@ export async function initRigTimelineView(container, params = {}) {
     detail.classList.add('expanded');
 
     document.getElementById('rt-detail-close').addEventListener('click', () => {
+      detailGuard(); // invalidate any in-flight record fetches for this panel
       detail.innerHTML = '<div class="gantt-detail-empty">Click an activity bar to view details</div>';
       detail.classList.remove('expanded');
       document.querySelectorAll('.gantt-bar-selected').forEach(b => b.classList.remove('gantt-bar-selected'));
@@ -617,6 +627,7 @@ export async function initRigTimelineView(container, params = {}) {
     if (job.apm_count > 0 && api) fetches.push(apiGet(`/wells/${encodeURIComponent(api)}/apms`).catch(() => ({ data: [] })));
 
     const results = await Promise.all(fetches);
+    if (!isCurrent()) return; // another bar was selected (or panel closed) meanwhile
     const wars = results[0].data || [];
     const apds = (job.apd_count > 0 && api) ? (results[1]?.data || []) : [];
     const apms = (job.apm_count > 0 && api) ? (results[job.apd_count > 0 ? 2 : 1]?.data || []) : [];

@@ -1,5 +1,5 @@
 import { apiGet } from '../core/api.js';
-import { formatNumber, formatDate, formatDepth, escapeHtml } from '../core/utils.js';
+import { formatNumber, formatDate, formatDepth, escapeHtml, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { debounce } from '../core/utils.js';
 import { initSplitResizer } from '../components/split-resizer.js';
@@ -96,7 +96,9 @@ export async function initWarView(container, params = {}) {
     applyFilters();
   });
 
+  const detailGuard = latestGuard();
   async function showWarDetail(sn) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('war-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -104,6 +106,7 @@ export async function initWarView(container, params = {}) {
       apiGet(`/war/${sn}`),
       apiGet(`/war/${sn}/tubulars`),
     ]);
+    if (!isCurrent()) return; // a newer selection superseded this one
 
     const actLabel = ACTIVITY_LABELS[data.well_activity_cd] || data.well_activity_cd || '—';
     const duration = durationDays(data.war_start_dt, data.war_end_dt);

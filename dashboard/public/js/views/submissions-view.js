@@ -1,5 +1,5 @@
 import { apiGet } from '../core/api.js';
-import { formatNumber, formatDate, formatDepth, escapeHtml } from '../core/utils.js';
+import { formatNumber, formatDate, formatDepth, escapeHtml, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { MultiSelect } from '../components/multi-select.js';
 import { debounce } from '../core/utils.js';
@@ -131,7 +131,9 @@ export async function initSubmissionsView(container, params = {}) {
   function fmtPsi(v) { return v != null ? `${formatNumber(Math.round(v))} psi` : '—'; }
   function fmtPpg(v) { return v != null ? `${v} ppg` : '—'; }
 
+  const detailGuard = latestGuard();
   async function showSubmissionDetail(type, sn) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('sub-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -143,6 +145,7 @@ export async function initSubmissionsView(container, params = {}) {
         apiGet(`/submissions/apd/${enc}/casing`),
         apiGet(`/submissions/apd/${enc}/geologic`),
       ]);
+      if (!isCurrent()) return; // a newer selection superseded this one
       renderAPDDetail(detailEl, d, casingRes.data, geoRes.data);
     } else {
       const [d, prevRes, subopRes] = await Promise.all([
@@ -150,6 +153,7 @@ export async function initSubmissionsView(container, params = {}) {
         apiGet(`/submissions/apm/${enc}/preventers`),
         apiGet(`/submissions/apm/${enc}/suboperations`),
       ]);
+      if (!isCurrent()) return; // a newer selection superseded this one
       renderAPMDetail(detailEl, d, prevRes.data, subopRes.data);
     }
   }

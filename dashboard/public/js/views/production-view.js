@@ -1,5 +1,5 @@
 import { apiGet, getStats } from '../core/api.js';
-import { formatNumber, formatCompact, debounce } from '../core/utils.js';
+import { formatNumber, formatCompact, debounce, latestGuard } from '../core/utils.js';
 import { ChartPanel } from '../components/chart-panel.js';
 
 export async function initProductionView(container) {
@@ -83,18 +83,30 @@ export async function initProductionView(container) {
   // State for selected entity
   let selectedEntity = { code: null, label: null };
   let selectedOpFilter = { code: null, label: null };
+  let disposed = false;
+  const docCleanups = [];
+  // Declared before the initial load calls below — these are used inside the
+  // hoisted load* functions, which run before execution reaches their bodies
+  const allChartsGuard = latestGuard();
+  const topGuard = latestGuard();
+  const entityChartGuard = latestGuard();
 
   // ——— Autocomplete helper ———
-  function setupAutocomplete(inputId, listId, searchType, onSelect) {
+  // getSearchType is a fn so the entity autocomplete can follow the View By
+  // selector without re-binding handlers.
+  function setupAutocomplete(inputId, listId, getSearchType, onSelect) {
     const input = document.getElementById(inputId);
     const list = document.getElementById(listId);
+    const guard = latestGuard();
 
     const search = debounce(async () => {
+      const isCurrent = guard();
       const q = input.value.trim();
       if (q.length < 2) { list.innerHTML = ''; list.style.display = 'none'; return; }
 
       try {
-        const res = await apiGet('/production/search', { q, type: searchType });
+        const res = await apiGet('/production/search', { q, type: getSearchType() });
+        if (!isCurrent()) return; // superseded by newer keystrokes
         if (res.data.length === 0) {
           list.innerHTML = '<div class="autocomplete-item autocomplete-empty">No results</div>';
         } else {
@@ -118,12 +130,15 @@ export async function initProductionView(container) {
       onSelect({ code, label });
     });
 
-    // Close on outside click
-    document.addEventListener('click', (e) => {
+    // Close on outside click — document-level, so it must be removed when
+    // the view is torn down or every visit leaks a listener
+    const onDocClick = (e) => {
       if (!input.contains(e.target) && !list.contains(e.target)) {
         list.style.display = 'none';
       }
-    });
+    };
+    document.addEventListener('click', onDocClick);
+    docCleanups.push(() => document.removeEventListener('click', onDocClick));
 
     return { input, list, clear: () => { input.value = ''; list.style.display = 'none'; } };
   }
@@ -136,13 +151,13 @@ export async function initProductionView(container) {
 
   // ——— Entity autocomplete ———
   let entitySearchType = 'field';
-  const entityAC = setupAutocomplete('prod-entity', 'prod-entity-list', entitySearchType, (sel) => {
+  const entityAC = setupAutocomplete('prod-entity', 'prod-entity-list', () => entitySearchType, (sel) => {
     selectedEntity = sel;
     loadEntityChart();
   });
 
   // ——— Operator filter autocomplete ———
-  const opFilterAC = setupAutocomplete('prod-op-filter', 'prod-op-filter-list', 'operator', (sel) => {
+  const opFilterAC = setupAutocomplete('prod-op-filter', 'prod-op-filter-list', () => 'operator', (sel) => {
     selectedOpFilter = sel;
     loadTopProducers();
     reloadMainCharts();
@@ -174,24 +189,9 @@ export async function initProductionView(container) {
       entityLabel.textContent = labels[val] || 'Entity';
       entityInput.placeholder = placeholders[val] || 'Type to search...';
 
-      // Update autocomplete search type by recreating the handler
+      // The autocomplete reads entitySearchType via its getter — no handler
+      // re-binding (the old oninput approach left two handlers racing).
       entitySearchType = val;
-      const list = document.getElementById('prod-entity-list');
-      entityInput.oninput = debounce(async () => {
-        const q = entityInput.value.trim();
-        if (q.length < 2) { list.innerHTML = ''; list.style.display = 'none'; return; }
-        try {
-          const res = await apiGet('/production/search', { q, type: entitySearchType });
-          if (res.data.length === 0) {
-            list.innerHTML = '<div class="autocomplete-item autocomplete-empty">No results</div>';
-          } else {
-            list.innerHTML = res.data.map(d =>
-              `<div class="autocomplete-item" data-code="${d.code}" data-label="${d.label.replace(/"/g, '&quot;')}">${highlight(d.label, q)}</div>`
-            ).join('');
-          }
-          list.style.display = 'block';
-        } catch (e) { console.error(e); }
-      }, 300);
     }
   });
 
@@ -221,9 +221,11 @@ export async function initProductionView(container) {
   }
 
   async function loadAllCharts() {
+    const isCurrent = allChartsGuard();
     const params = getFilterParams();
     try {
       const res = await apiGet('/production/annual-summary', params);
+      if (disposed || !isCurrent()) return;
       loadAnnualChart(res.data);
       loadSummaryChart(res.data);
     } catch (e) { console.error(e); }
@@ -246,6 +248,7 @@ export async function initProductionView(container) {
 
   // ——— Entity chart load ———
   async function loadEntityChart() {
+    const isCurrent = entityChartGuard();
     const viewBy = document.getElementById('prod-view-by').value;
     const code = selectedEntity.code;
     const label = selectedEntity.label;
@@ -268,6 +271,7 @@ export async function initProductionView(container) {
     try {
       const params = { [queryKeys[viewBy]]: code, ...filterParams };
       const res = await apiGet(endpoints[viewBy], params);
+      if (disposed || !isCurrent()) return;
       const data = res.data;
       if (data.length === 0) {
         document.getElementById('prod-chart-title').textContent = `No production data found for ${label}`;
@@ -295,6 +299,7 @@ export async function initProductionView(container) {
 
   // ——— Top producers ———
   async function loadTopProducers() {
+    const isCurrent = topGuard();
     const metric = document.getElementById('prod-top-metric').value;
     const yearFrom = document.getElementById('prod-year-from').value;
     const yearTo = document.getElementById('prod-year-to').value;
@@ -306,7 +311,11 @@ export async function initProductionView(container) {
     if (area) params.area_block = area;
     if (selectedOpFilter.code) params.operator_num = selectedOpFilter.code;
 
-    const res = await apiGet('/production/top-producers', params);
+    let res;
+    try {
+      res = await apiGet('/production/top-producers', params);
+    } catch (e) { console.error(e); return; }
+    if (disposed || !isCurrent()) return;
 
     const yearLabel = yearFrom && yearTo ? `${yearFrom}–${yearTo}`
       : yearFrom ? `${yearFrom}+` : yearTo ? `–${yearTo}` : 'All Time';
@@ -373,5 +382,11 @@ export async function initProductionView(container) {
     });
   }
 
-  return () => { mainChart.destroy(); topChart.destroy(); summaryChart.destroy(); };
+  return () => {
+    disposed = true;
+    docCleanups.forEach(fn => fn());
+    mainChart.destroy();
+    topChart.destroy();
+    summaryChart.destroy();
+  };
 }

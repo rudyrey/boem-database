@@ -1,5 +1,5 @@
 import { apiGet, getStats } from '../core/api.js';
-import { formatNumber, formatDate, formatDepth, wellStatusBadge, escapeHtml } from '../core/utils.js';
+import { formatNumber, formatDate, formatDepth, wellStatusBadge, escapeHtml, latestGuard } from '../core/utils.js';
 import { DataTable } from '../components/data-table.js';
 import { ChartPanel, productionChartConfig } from '../components/chart-panel.js';
 import { MiniMap } from '../components/mini-map.js';
@@ -185,7 +185,9 @@ export async function initWellsView(container, params = {}) {
   let detailChart = null;
   let detailMap = null;
 
+  const detailGuard = latestGuard();
   async function showWellDetail(id) {
+    const isCurrent = detailGuard();
     const detailEl = document.getElementById('well-detail');
     detailEl.innerHTML = '<div class="detail-panel"><div class="loading-overlay"><div class="spinner"></div>Loading...</div></div>';
 
@@ -198,6 +200,7 @@ export async function initWellsView(container, params = {}) {
       apiGet(`/wells/${encodeURIComponent(id)}/eor`),
       apiGet(`/wells/${encodeURIComponent(id)}/war`),
     ]);
+    if (!isCurrent()) return; // a newer selection superseded this one
 
     detailEl.innerHTML = `
       <div class="detail-panel">
