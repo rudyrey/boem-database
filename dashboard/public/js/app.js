@@ -66,6 +66,16 @@ import { showToast } from './core/toast.js';
     return initEorView(container, params);
   });
 
+  router.add('/rigs', async () => {
+    const { initRigTimelineView } = await import('./views/rig-timeline-view.js');
+    return initRigTimelineView(container);
+  });
+
+  router.add('/rigs/:name', async (params) => {
+    const { initRigTimelineView } = await import('./views/rig-timeline-view.js');
+    return initRigTimelineView(container, params);
+  });
+
   router.add('/war', async () => {
     const { initWarView } = await import('./views/war-view.js');
     return initWarView(container);

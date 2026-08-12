@@ -54,14 +54,21 @@ export function escapeHtml(str) {
 }
 
 export function wellStatusBadge(status) {
+  // BOREHOLE_STAT_CD values — keep in sync with wellStatusLabels in server/db.js
   const map = {
-    'C': ['Completed', 'badge-success'],
-    'D': ['Drilling', 'badge-info'],
-    'E': ['Expired', 'badge-muted'],
-    'O': ['Active', 'badge-success'],
-    'R': ['P&A', 'badge-danger'],
+    'DRL': ['Drilling', 'badge-info'],
+    'COM': ['Completed', 'badge-success'],
+    'PA': ['P&A', 'badge-danger'],
+    'TA': ['Temp Abandoned', 'badge-warning'],
+    'DSI': ['Drilling Susp.', 'badge-warning'],
+    'ST': ['Sidetracked', 'badge-info'],
+    'BP': ['Bypassed', 'badge-muted'],
+    'CNL': ['Cancelled', 'badge-muted'],
+    'APD': ['Approved APD', 'badge-muted'],
+    'AST': ['Approved ST', 'badge-muted'],
+    'VCW': ['Volume Chamber', 'badge-muted'],
   };
-  const [label, cls] = map[status] || [status || '—', 'badge-muted'];
+  const [label, cls] = map[status] || [escapeHtml(status) || '—', 'badge-muted'];
   return `<span class="badge ${cls}">${label}</span>`;
 }
 

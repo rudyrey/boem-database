@@ -25,6 +25,7 @@ app.use('/api/fields', require('./server/routes/fields'));
 app.use('/api/submissions', require('./server/routes/submissions'));
 app.use('/api/eor', require('./server/routes/eor'));
 app.use('/api/war', require('./server/routes/war'));
+app.use('/api/rig-timeline', require('./server/routes/rig-timeline'));
 app.use('/api/search', require('./server/routes/search'));
 
 // Error handler

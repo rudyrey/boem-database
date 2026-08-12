@@ -28,10 +28,17 @@ BSEE="https://www.data.bsee.gov"
 # Format: "local_filename|url|description"
 # Each entry is one zip to download. URLs verified 2026-03-18.
 # ============================================================================
+# NOTE (2026-05): BOEM restructured its data center. The old per-dataset
+# *_delimit.zip / *_fixed.zip files were replaced by consolidated *RawData.zip
+# files (header-row delimited "mv_*" views, nested in a subdirectory). The
+# field/reserves and rig-list reference files were preserved in the OLD format
+# but RELOCATED (/FieldReserves/Files/ and /Platform/Files/). Local filenames
+# below are kept stable so LOADER_MAP / checksum keys don't change; only the
+# remote URLs and the extracted inner files differ.
 DOWNLOADS=(
-  # Wells & Boreholes
-  "borehole_delimit.zip|${BOEM}/Well/Files/borehole_delimit.zip|Boreholes / Wells"
-  "rig_id_delimit.zip|${BOEM}/Well/Files/rig_id_delimit.zip|Rig ID List"
+  # Wells & Boreholes  (new consolidated RawData format)
+  "borehole_delimit.zip|${BOEM}/Well/Files/BoreholeRawData.zip|Boreholes / Wells"
+  "rig_id_delimit.zip|${BOEM}/Platform/Files/rigidlistdelimit.zip|Rig ID List (relocated, old format)"
 
   # eWell Submissions (from BSEE — updated daily)
   "eWellAPDRawData.zip|${BSEE}/Well/Files/eWellAPDRawData.zip|eWell APD (Permit to Drill)"
@@ -39,31 +46,27 @@ DOWNLOADS=(
   "eWellEORRawData.zip|${BSEE}/Well/Files/eWellEORRawData.zip|eWell EOR (End of Operations)"
   "eWellWARRawData.zip|${BSEE}/Well/Files/eWellWARRawData.zip|eWell WAR (Well Activity Reports)"
 
-  # Companies
-  "company_all_delimit.zip|${BOEM}/Company/Files/company_all_delimit.zip|Companies"
+  # Companies  (new consolidated RawData format)
+  "company_all_delimit.zip|${BOEM}/Company/Files/CompanyRawData.zip|Companies"
 
-  # Leasing
-  "lease_data_fixed.zip|${BOEM}/Leasing/Files/lease_data_fixed.zip|Lease Data"
-  "lease_list_fixed.zip|${BOEM}/Leasing/Files/lease_list_fixed.zip|Lease List"
-  "lease_owner_op_delimit.zip|${BOEM}/Leasing/Files/lease_owner_op_delimit.zip|Lease Owners"
+  # Leasing  (new consolidated RawData format)
+  "lease_data_fixed.zip|${BOEM}/Leasing/Files/SerialRegRawData.zip|Lease Data (Serial Register)"
+  "lease_list_fixed.zip|${BOEM}/Leasing/Files/LABRawData.zip|Lease List (Area/Block)"
+  "lease_owner_op_delimit.zip|${BOEM}/Leasing/Files/LeaseOwnerRawData.zip|Lease Owners"
 
-  # Platforms
-  "platform_master_fixed.zip|${BOEM}/Platform/Files/platform_master_fixed.zip|Platform Masters"
-  "platform_structure_fixed.zip|${BOEM}/Platform/Files/platform_structure_fixed.zip|Platform Structures"
-  "platform_location_fixed.zip|${BOEM}/Platform/Files/platform_location_fixed.zip|Platform Locations"
-  "platform_approvals_delimit.zip|${BOEM}/Platform/Files/platform_approvals_delimit.zip|Platform Approvals"
-  "platform_removed_delimit.zip|${BOEM}/Platform/Files/platform_removed_delimit.zip|Platform Removals"
+  # Platforms  (master/structure/location consolidated into PlatStruc)
+  "platform_master_fixed.zip|${BOEM}/Platform/Files/PlatStrucRawData.zip|Platform Structures (master+location)"
 
-  # Pipelines
-  "pipeline_master_delimit.zip|${BOEM}/Pipeline/Files/pipeline_master_delimit.zip|Pipeline Masters"
-  "pipeline_location_delimit.zip|${BOEM}/Pipeline/Files/pipeline_location_delimit.zip|Pipeline Locations"
+  # Pipelines  (new consolidated RawData format)
+  "pipeline_master_delimit.zip|${BOEM}/Pipeline/Files/PipePermRawData.zip|Pipeline Permits/Segments"
+  "pipeline_location_delimit.zip|${BOEM}/Pipeline/Files/PipeLocRawData.zip|Pipeline Locations"
 
-  # Fields & Appendices
-  "field_names_delimit.zip|${BOEM}/Production/Files/field_names_delimit.zip|Field Names"
-  "field_production_delimit.zip|${BOEM}/Production/Files/field_production_delimit.zip|Field Production"
-  "appendix_a_delimit.zip|${BOEM}/Production/Files/appendix_a_delimit.zip|Appendix A (Area/Block to Field)"
-  "appendix_b_delimit.zip|${BOEM}/Production/Files/appendix_b_delimit.zip|Appendix B (Lease to Field)"
-  "appendix_c_delimit.zip|${BOEM}/Production/Files/appendix_c_delimit.zip|Appendix C (Operator to Field)"
+  # Fields & Appendices  (relocated to /FieldReserves/, OLD format preserved)
+  "field_names_delimit.zip|${BOEM}/FieldReserves/Files/mastdatadelimit.zip|Field Names"
+  "field_production_delimit.zip|${BOEM}/FieldReserves/Files/mastproddelimit.zip|Field Production"
+  "appendix_a_delimit.zip|${BOEM}/FieldReserves/Files/appendadelimit.zip|Appendix A (Area/Block to Field)"
+  "appendix_b_delimit.zip|${BOEM}/FieldReserves/Files/appendbdelimit.zip|Appendix B (Lease to Field)"
+  "appendix_c_delimit.zip|${BOEM}/FieldReserves/Files/appendcdelimit.zip|Appendix C (Operator to Field)"
 
   # Production by Platform
   "ProdByPlatformRawData.zip|${BSEE}/Production/Files/ProdByPlatformRawData.zip|Production by Platform"
@@ -83,27 +86,38 @@ download_file() {
   local url="$2"
   local desc="$3"
 
-  # Use -z to skip download if local file is newer than remote (conditional GET)
+  # Download to a temp file and only replace the previous copy after the new
+  # one verifies as a readable zip — a failed or truncated transfer must never
+  # destroy the last good download.
+  local tmp="${dest}.tmp"
   if [ -f "$dest" ]; then
+    # Conditional GET against the existing file's mtime (304 = unchanged)
     local http_code
-    http_code=$(curl -fSL --retry 3 --retry-delay 5 -z "$dest" -o "$dest" -w "%{http_code}" "$url" 2>/dev/null) || true
+    http_code=$(curl -fsSL --retry 3 --retry-delay 5 -z "$dest" -o "$tmp" -w "%{http_code}" "$url") || http_code=""
     if [ "$http_code" = "304" ]; then
+      rm -f "$tmp"
       log "    $(basename "$dest") (unchanged)"
       return 0
     fi
   else
-    curl -fSL --retry 3 --retry-delay 5 -o "$dest" "$url" 2>/dev/null || true
+    curl -fsSL --retry 3 --retry-delay 5 -o "$tmp" "$url" || true
   fi
 
-  if [ -f "$dest" ] && [ -s "$dest" ]; then
+  if [ -s "$tmp" ] && unzip -tqq "$tmp" >/dev/null 2>&1; then
+    mv -f "$tmp" "$dest"
     local size
     size=$(du -h "$dest" | cut -f1)
     log "    $(basename "$dest") (${size})"
     return 0
+  fi
+
+  rm -f "$tmp"
+  if [ -f "$dest" ]; then
+    log "    FAILED: $(basename "$dest") (kept previous copy)"
   else
     log "    FAILED: $(basename "$dest")"
-    return 1
   fi
+  return 1
 }
 
 download_all() {
@@ -118,9 +132,9 @@ download_all() {
     IFS='|' read -r fname url desc <<< "$entry"
     log "  ${desc}..."
     if download_file "$RAW_DIR/$fname" "$url" "$desc"; then
-      ((ok++))
+      ok=$((ok+1))
     else
-      ((fail++))
+      fail=$((fail+1))
     fi
   done
 
@@ -134,12 +148,12 @@ download_all() {
     local ogor_file="ogora_${year}_delimit.zip"
     local ogor_url="${BSEE}/Production/Files/ogora${year}delimit.zip"
     if download_file "$RAW_DIR/$ogor_file" "$ogor_url" "OGOR-A ${year}"; then
-      ((ok++))
+      ok=$((ok+1))
     else
       if [ "$year" -ge "$((current_year))" ]; then
         log "    (${year} may not be available yet)"
       else
-        ((fail++))
+        fail=$((fail+1))
       fi
     fi
   done
@@ -154,19 +168,19 @@ extract_all() {
 
   for zf in "$RAW_DIR"/*.zip; do
     [ -f "$zf" ] || continue
-    local bn
-    bn=$(basename "$zf")
-
-    if [[ "$bn" == eWell* ]]; then
-      # eWell zips nest files in a subdirectory — flatten
-      local tmpdir
-      tmpdir=$(mktemp -d)
-      unzip -qo "$zf" -d "$tmpdir" 2>/dev/null || true
-      find "$tmpdir" -type f \( -name "*.txt" -o -name "*.DAT" \) -exec mv {} "$EXTRACTED_DIR/" \;
+    # Most BOEM/BSEE RawData zips nest their data files in a subdirectory
+    # (e.g. BoreholeRawData/mv_boreholes_all.txt). Extract to a temp dir and
+    # flatten all .txt/.DAT files to EXTRACTED_DIR root so loaders find them.
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    if ! unzip -qo "$zf" -d "$tmpdir" 2>/dev/null; then
+      log "  WARNING: could not extract $(basename "$zf") — skipping"
       rm -rf "$tmpdir"
-    else
-      unzip -qo "$zf" -d "$EXTRACTED_DIR" 2>/dev/null || true
+      continue
     fi
+    find "$tmpdir" -type f \( -name "*.txt" -o -name "*.DAT" -o -name "*.dat" \) \
+      -exec mv -f {} "$EXTRACTED_DIR/" \; 2>/dev/null || true
+    rm -rf "$tmpdir"
   done
 
   local count

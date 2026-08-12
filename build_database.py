@@ -35,6 +35,7 @@ import glob
 import hashlib
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import zipfile
@@ -147,6 +148,33 @@ def parse_delimited_file(filepath, encoding="latin-1"):
     return rows
 
 
+def parse_delimited_with_header(filepath, encoding="latin-1"):
+    """Parse a comma-delimited file with a header row of quoted column names.
+
+    Returns a list of dicts keyed by UPPERCASED column name. Used for BOEM's
+    newer consolidated "mv_*" raw-data views (header row + quoted CSV), which
+    replaced the older headerless positional files. Returns [] if missing.
+    """
+    path = Path(filepath)
+    if not path.exists():
+        return []
+    rows = []
+    with open(path, "r", encoding=encoding) as f:
+        reader = csv.reader(f, delimiter=",", quotechar='"')
+        try:
+            header = next(reader)
+        except StopIteration:
+            return []
+        cols = [h.strip().strip('"').upper() for h in header]
+        for row in reader:
+            if not row:
+                continue
+            rec = {cols[i]: (row[i].strip() if i < len(row) else None)
+                   for i in range(len(cols))}
+            rows.append(rec)
+    return rows
+
+
 def parse_fixed_width(filepath, spec, encoding="latin-1"):
     """Parse a fixed-width file given a spec of (start_1based, length, name) tuples."""
     rows = []
@@ -207,11 +235,26 @@ def mark_built(conn, key, checksum):
 
 
 def extract_if_needed():
-    """Extract all zip files to the extracted directory."""
+    """Extract all zip files, flattening data files to the extracted directory.
+
+    BOEM/BSEE RawData zips nest their .txt/.DAT files inside a subdirectory
+    (e.g. ``BoreholeRawData/mv_boreholes_all.txt``). We flatten everything to
+    EXTRACTED_DIR root so loaders can reference files by bare name. Corrupt or
+    non-zip files are skipped with a warning rather than aborting the build.
+    """
+    import tempfile
     EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
     for zf in RAW_DIR.glob("*.zip"):
-        with zipfile.ZipFile(zf, "r") as z:
-            z.extractall(EXTRACTED_DIR)
+        if not zipfile.is_zipfile(zf):
+            print(f"  WARNING: {zf.name} is not a valid zip — skipping")
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            with zipfile.ZipFile(zf, "r") as z:
+                z.extractall(tmp)
+            for root, _dirs, files in os.walk(tmp):
+                for fn in files:
+                    if fn.lower().endswith((".txt", ".dat")):
+                        shutil.move(os.path.join(root, fn), str(EXTRACTED_DIR / fn))
     print(f"Extracted all zip files to {EXTRACTED_DIR}")
 
 
@@ -986,35 +1029,55 @@ def create_schema(conn):
 
 def load_companies(conn):
     print("Loading companies...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "compalldelimit.txt")
+    # New format: CompanyRawData/mv_companies_all.txt (header row + quoted CSV)
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_companies_all.txt")
     data = []
     for r in rows:
-        if len(r) < 5:
+        num = s(r.get("MMS_COMPANY_NUM"))
+        if not num:
             continue
         data.append((
-            s(r[0]),           # company_num
-            s(r[2]),           # company_name (bus_asc_name)
-            s(r[3]),           # sort_name
-            parse_date_yyyymmdd(r[1]),  # start_date
-            parse_date_yyyymmdd(r[4]),  # term_date
-            s(r[5]) if len(r) > 5 else None,   # pacific
-            s(r[6]) if len(r) > 6 else None,   # gom
-            s(r[7]) if len(r) > 7 else None,   # alaska
-            s(r[8]) if len(r) > 8 else None,   # atlantic
-            s(r[9]) if len(r) > 9 else None,   # duns
-            parse_date_yyyymmdd(r[10]) if len(r) > 10 else None,  # term_action
-            s(r[11]) if len(r) > 11 else None,  # term_code
-            s(r[12]) if len(r) > 12 else None,  # division
-            s(r[13]) if len(r) > 13 else None,  # addr1
-            s(r[14]) if len(r) > 14 else None,  # addr2
-            s(r[15]) if len(r) > 15 else None,  # city
-            s(r[16]) if len(r) > 16 else None,  # state
-            s(r[17]) if len(r) > 17 else None,  # zip
-            s(r[18]) if len(r) > 18 else None,  # country
+            num,                                       # company_num
+            s(r.get("BUS_ASC_NAME")),                  # company_name
+            s(r.get("SORT_NAME")),                     # sort_name
+            parse_date_mdy(r.get("MMS_START_DATE")),   # start_date
+            parse_date_mdy(r.get("MMS_TERM_DATE")),    # term_date
+            s(r.get("PAC_REGION_CODE")),               # pacific
+            s(r.get("GOM_REGION_CODE")),               # gom
+            s(r.get("ALASKA_RGN_CODE")),               # alaska
+            s(r.get("ATL_REGION_CODE")),               # atlantic
+            s(r.get("DUNS_NUMBER")),                   # duns
+            parse_date_mdy(r.get("TERM_ACTN_EFF_DT")), # term_action
+            s(r.get("TERMINATION_CODE")),              # term_code
+            s(r.get("DIVISION_NAME")),                 # division
+            s(r.get("LINE_1_ADDRESS")),                # addr1
+            s(r.get("LINE_2_ADDRESS")),                # addr2
+            s(r.get("CITY_NAME")),                     # city
+            s(r.get("POSTAL_ST_CODE")),                # state
+            s(r.get("ZIP_CODE")),                      # zip
+            s(r.get("COUNTRY_NAME")),                  # country
         ))
     conn.executemany("""INSERT OR REPLACE INTO companies VALUES
         (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
     print(f"  -> {len(data)} companies loaded")
+
+
+def _company_name_to_num(conn):
+    """Build an uppercased company-name -> MMS_COMPANY_NUM lookup.
+
+    BOEM's new consolidated well/platform views expose the operator by NAME
+    (BUS_ASC_NAME / COMPANY_NAME) rather than MMS company number. We resolve
+    back to the number via the already-loaded companies table so existing
+    operator_num / company_num joins keep working. Call AFTER load_companies.
+    """
+    lookup = {}
+    for num, name in conn.execute(
+        "SELECT company_num, company_name FROM companies WHERE company_name IS NOT NULL"
+    ):
+        key = name.strip().upper()
+        # Prefer the first (active) match; don't overwrite.
+        lookup.setdefault(key, num)
+    return lookup
 
 
 def load_rigs(conn):
@@ -1236,343 +1299,255 @@ def load_appendices(conn):
 
 
 def load_leases(conn):
-    print("Loading leases (fixed-width)...")
-    spec = [
-        (1, 7, "lease_number"),
-        (16, 1, "serial_type_code"),
-        (17, 7, "sale_number"),
-        (28, 8, "expected_expiration"),
-        (36, 5, "api_state_county"),
-        (41, 10, "tract_number"),
-        (51, 8, "effective_date"),
-        (59, 2, "primary_term"),
-        (61, 8, "expiration_date"),
-        (69, 5, "bid_system_code"),
-        (74, 10, "royalty_rate"),
-        (87, 14, "initial_area"),
-        (101, 14, "current_area"),
-        (115, 8, "rent_per_unit"),
-        (123, 13, "bid_amount"),
-        (136, 13, "bid_per_unit"),
-        (150, 5, "min_water_depth"),
-        (155, 5, "max_water_depth"),
-        (160, 1, "measure_flag"),
-        (161, 3, "planning_area"),
-        (166, 2, "district_code"),
-        (171, 6, "lease_status"),
-        (177, 8, "status_eff_date"),
-        (185, 8, "suspension_exp"),
-        (193, 1, "suspension_type"),
-        (194, 6, "well_name"),
-        (200, 1, "qualifying_well_type"),
-        (201, 8, "qualifying_date"),
-        (209, 3, "discovery_type"),
-        (212, 1, "field_discovery"),
-        (213, 3, "distance_to_shore"),
-        (217, 3, "num_platforms"),
-        (220, 8, "platform_approval"),
-        (228, 8, "first_platform_set"),
-        (236, 2, "lease_section"),
-        (238, 4, "postal_state"),
-        (242, 12, "lease_section_area"),
-        (254, 7, "protraction_number"),
-        (269, 8, "suspension_eff"),
-        (277, 8, "first_production"),
-        (289, 2, "area_code"),
-        (293, 6, "block_number"),
-    ]
-    rows = parse_fixed_width(EXTRACTED_DIR / "LSETAPE.DAT", spec)
+    print("Loading leases...")
+    # New format: financials/status from SerialRegRawData/mv_serreg_leases.txt,
+    # enriched with area/block/expiration/water-depth from the Lease Area Block
+    # file (LABRawData/mv_lease_area_block.txt). Many legacy fixed-width columns
+    # (tract, suspension, discovery, platform dates, etc.) have no equivalent in
+    # the new views and are left NULL.
+    lab = {}
+    for r in parse_delimited_with_header(EXTRACTED_DIR / "mv_lease_area_block.txt"):
+        ln = s(r.get("LEASE_NUMBER"))
+        if ln:
+            lab[ln] = r
+
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_serreg_leases.txt")
     data = []
     for r in rows:
+        ln = s(r.get("LEASE_NUMBER"))
+        if not ln:
+            continue
+        lb = lab.get(ln, {})
+        exp_date = parse_date_mdy(lb.get("LEASE_EXPIR_DATE")) or parse_date_mdy(r.get("LEASE_EXPT_EXPIR"))
         data.append((
-            r["lease_number"],
-            r["serial_type_code"],
-            r["sale_number"],
-            parse_date_yyyymmdd(r["expected_expiration"]),
-            r["api_state_county"],
-            r["tract_number"],
-            parse_date_yyyymmdd(r["effective_date"]),
-            to_int(r["primary_term"]),
-            parse_date_yyyymmdd(r["expiration_date"]),
-            r["bid_system_code"],
-            to_float(r["royalty_rate"]),
-            to_float(r["initial_area"]),
-            to_float(r["current_area"]),
-            to_float(r["rent_per_unit"]),
-            to_float(r["bid_amount"]),
-            to_float(r["bid_per_unit"]),
-            to_int(r["min_water_depth"]),
-            to_int(r["max_water_depth"]),
-            r["measure_flag"],
-            r["planning_area"],
-            r["district_code"],
-            r["lease_status"],
-            parse_date_yyyymmdd(r["status_eff_date"]),
-            parse_date_yyyymmdd(r["suspension_exp"]),
-            r["suspension_type"],
-            r["well_name"],
-            r["qualifying_well_type"],
-            parse_date_yyyymmdd(r["qualifying_date"]),
-            r["discovery_type"],
-            r["field_discovery"],
-            to_int(r["distance_to_shore"]),
-            to_int(r["num_platforms"]),
-            parse_date_yyyymmdd(r["platform_approval"]),
-            parse_date_yyyymmdd(r["first_platform_set"]),
-            r["lease_section"],
-            r["postal_state"],
-            to_float(r["lease_section_area"]),
-            r["protraction_number"],
-            parse_date_yyyymmdd(r["suspension_eff"]),
-            parse_date_yyyymmdd(r["first_production"]),
-            r["area_code"],
-            r["block_number"],
+            ln,                                           # lease_number
+            None,                                         # serial_type_code (n/a)
+            s(r.get("SALE_NUMBER")),                      # sale_number
+            parse_date_mdy(r.get("LEASE_EXPT_EXPIR")),    # expected_expiration
+            None,                                         # api_state_county (n/a)
+            None,                                         # tract_number (n/a)
+            parse_date_mdy(r.get("LEASE_EFF_DATE")),      # effective_date
+            None,                                         # primary_term (n/a)
+            exp_date,                                     # expiration_date
+            None,                                         # bid_system_code (n/a)
+            to_float(r.get("ROYALTY_RATE")),              # royalty_rate
+            to_float(r.get("INITIAL_AREA")),              # initial_area
+            to_float(r.get("CURRENT_AREA")),              # current_area
+            to_float(r.get("RENT_PER_UNIT")),             # rent_per_unit
+            to_float(r.get("BROBIDAMOUNT")),              # bid_amount
+            to_float(r.get("BROBIDPERUNIT")),             # bid_per_unit
+            None,                                         # min_water_depth (n/a)
+            to_int(lb.get("BLK_MAX_WTR_DPTH")),           # max_water_depth (LAB)
+            s(r.get("SYS_MEAS_FLAG")),                    # measure_flag
+            None,                                         # planning_area_code (n/a)
+            None,                                         # district_code (n/a)
+            s(r.get("LEASE_STATUS_CD")),                  # lease_status
+            None,                                         # status_effective_date
+            None,                                         # suspension_expiration
+            None,                                         # suspension_type
+            None,                                         # well_name
+            None,                                         # qualifying_well_type
+            None,                                         # qualifying_date
+            None,                                         # discovery_type
+            None,                                         # field_discovery
+            None,                                         # distance_to_shore
+            None,                                         # num_platforms
+            None,                                         # platform_approval_date
+            None,                                         # first_platform_set_date
+            None,                                         # lease_section_code
+            None,                                         # postal_state_code
+            None,                                         # lease_section_area
+            None,                                         # protraction_number
+            None,                                         # suspension_eff_date
+            None,                                         # first_production_date
+            s(lb.get("AREA_CODE")),                       # area_code (LAB)
+            s(lb.get("BLOCK_NUM")),                       # block_number (LAB)
         ))
     conn.executemany(f"INSERT OR REPLACE INTO leases VALUES ({','.join('?' * 42)})", data)
     print(f"  -> {len(data)} leases loaded")
 
 
 def load_lease_list(conn):
-    print("Loading lease list (fixed-width)...")
-    spec = [
-        (1, 7, "lease_number"),
-        (8, 2, "district_code"),
-        (10, 1, "appeal_flag"),
-        (11, 1, "pending_flag"),
-        (12, 4, "mineral_type"),
-        (16, 8, "area_block"),
-        (24, 1, "multi_partial"),
-        (25, 6, "lease_status"),
-        (31, 10, "status_date"),
-        (41, 1, "order4_det"),
-        (42, 1, "status_flag"),
-        (43, 50, "designated_operator"),
-    ]
-    rows = parse_fixed_width(EXTRACTED_DIR / "LSTLEASE.DAT", spec)
+    print("Loading lease list...")
+    # New format: LABRawData/mv_lease_area_block.txt. The old LSTLEASE.DAT had a
+    # designated_operator column which the new view lacks; v_active_leases LEFT
+    # JOINs lease_list for designated_operator/mineral_type, which will now be
+    # NULL. lease_number + area_block + lease_status are preserved.
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_lease_area_block.txt")
     data = []
     for r in rows:
+        ln = s(r.get("LEASE_NUMBER"))
+        if not ln:
+            continue
+        area, block = s(r.get("AREA_CODE")), s(r.get("BLOCK_NUM"))
+        area_block = f"{area} {block.strip()}" if area and block else (area or block)
         data.append((
-            r["lease_number"],
-            r["district_code"],
-            r["appeal_flag"],
-            r["pending_flag"],
-            r["mineral_type"],
-            r["area_block"],
-            r["multi_partial"],
-            r["lease_status"],
-            r["status_date"],
-            r["order4_det"],
-            r["status_flag"],
-            r["designated_operator"],
+            ln,                                       # lease_number
+            None,                                     # district_code
+            None,                                     # appeal_flag
+            None,                                     # pending_flag
+            None,                                     # mineral_type
+            area_block,                               # area_block
+            None,                                     # multi_partial
+            s(r.get("LEASE_STATUS_CD")),              # lease_status
+            parse_date_mdy(r.get("LEASE_EFF_DATE")),  # status_date (eff date proxy)
+            None,                                     # order4_det
+            None,                                     # status_flag
+            None,                                     # designated_operator (n/a)
         ))
     conn.executemany("INSERT INTO lease_list VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", data)
     print(f"  -> {len(data)} lease list records loaded")
 
 
 def load_lease_owners(conn):
-    print("Loading lease owners w/ designated operator...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "lseownddelimit.txt")
+    print("Loading lease owners...")
+    # New format: LeaseOwnerRawData/mv_lease_owners_main.txt. Designated operator
+    # is no longer in this file (left NULL).
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_lease_owners_main.txt")
     data = []
     for r in rows:
-        if len(r) < 7:
+        ln = s(r.get("LEASE_NUMBER"))
+        if not ln:
             continue
         data.append((
-            s(r[0]),                    # lease_number
-            s(r[5]),                    # company_num
-            to_float(r[6]),             # assignment_pct
-            parse_date_yyyymmdd(r[1]),  # approval_date
-            parse_date_yyyymmdd(r[2]),  # effective_date
-            None,                       # term_date (not in this file)
-            s(r[3]),                    # assignment_status
-            None,                       # owner_aliquot
-            None,                       # owner_group
-            s(r[8]) if len(r) > 8 else None,  # designated_operator
+            ln,                                        # lease_number
+            s(r.get("MMS_COMPANY_NUM")),               # company_num
+            to_float(r.get("ASSIGNMENT_PCT")),         # assignment_pct
+            parse_date_mdy(r.get("ASSGN_APRV_DATE")),  # assignment_approval
+            parse_date_mdy(r.get("ASSGN_EFF_DATE")),   # assignment_effective
+            parse_date_mdy(r.get("ASSGN_TERM_DATE")),  # assignment_term
+            s(r.get("ASGN_STATUS_CODE")),              # assignment_status
+            s(r.get("OWNER_ALIQUOT_CD")),              # owner_aliquot
+            s(r.get("OWNER_GROUP_CODE")),              # owner_group
+            None,                                      # designated_operator (n/a)
         ))
     conn.executemany("INSERT INTO lease_owners VALUES (?,?,?,?,?,?,?,?,?,?)", data)
     print(f"  -> {len(data)} lease owner records loaded")
 
 
 def load_platforms(conn):
-    print("Loading platform masters (fixed-width)...")
-    spec = [
-        (1, 8, "complex_id"),
-        (9, 1, "abandon_flag"),
-        (10, 1, "alloc_meter"),
-        (11, 1, "attended_8hr"),
-        (12, 1, "condensate"),
-        (13, 4, "distance_to_shore"),
-        (17, 1, "drilling"),
-        (18, 1, "fired_vessel"),
-        (19, 1, "gas_prod"),
-        (20, 1, "gas_flaring"),
-        (21, 5, "company_num"),
-        (26, 1, "manned_24hr"),
-        (27, 1, "major_complex"),
-        (28, 7, "lease_number"),
-        (35, 11, "last_rev_date"),
-        (46, 1, "lact_meter"),
-        (47, 1, "injection_code"),
-        (48, 1, "heliport"),
-        (49, 1, "workover"),
-        (50, 1, "water_prod"),
-        (51, 5, "water_depth"),
-        (56, 1, "tank_gauge"),
-        (57, 1, "sulfur_prod"),
-        (58, 2, "subdistrict"),
-        (60, 1, "store_tank"),
-        (61, 2, "rig_count"),
-        (63, 1, "qtr_type"),
-        (64, 1, "prod_eqmt"),
-        (65, 1, "production"),
-        (66, 1, "power_source"),
-        (67, 1, "power_gen"),
-        (68, 1, "oil_prod"),
-        (69, 1, "gas_sale_meter"),
-        (70, 8, "field_name_code"),
-        (78, 3, "district_code"),
-        (81, 2, "crane_count"),
-        (83, 1, "compressor"),
-        (84, 1, "comgl_prod"),
-        (85, 3, "bed_count"),
-        (88, 2, "area_code"),
-        (90, 6, "block_number"),
-        (96, 1, "meter_prover"),
-    ]
-    rows = parse_fixed_width(EXTRACTED_DIR / "platmast.DAT", spec)
-    data = []
+    print("Loading platform masters...")
+    # New format: PlatStrucRawData/mv_platstruc_structures.txt is per-STRUCTURE;
+    # the old platmast.DAT was per-COMPLEX. We collapse to one row per complex
+    # (preferring the major structure). Producing flags, equipment, rig/bed/crane
+    # counts and distance-to-shore are no longer in the bulk file and are NULL;
+    # oil_producing/gas_producing are derived later from production_by_platform.
+    name2num = _company_name_to_num(conn)
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_platstruc_structures.txt")
+    by_complex = {}
     for r in rows:
+        cid = s(r.get("COMPLEX_ID_NUM"))
+        if not cid:
+            continue
+        # Prefer the major structure as the complex representative.
+        if cid not in by_complex or s(r.get("MAJ_STRUC_FLAG")) == "Y":
+            by_complex[cid] = r
+
+    data = []
+    for cid, r in by_complex.items():
+        op_name = s(r.get("BUS_ASC_NAME"))
         data.append((
-            s(r["complex_id"]),
-            s(r["company_num"]),
-            s(r["lease_number"]),
-            s(r["area_code"]),
-            s(r["block_number"]),
-            s(r["field_name_code"]),
-            s(r["district_code"]),
-            to_int(r["water_depth"]),
-            to_int(r["distance_to_shore"]),
-            r["oil_prod"],
-            r["gas_prod"],
-            r["water_prod"],
-            r["condensate"],
-            r["drilling"],
-            r["manned_24hr"],
-            r["attended_8hr"],
-            r["heliport"],
-            r["sulfur_prod"],
-            r["compressor"],
-            r["workover"],
-            r["injection_code"],
-            r["production"],
-            r["prod_eqmt"],
-            r["power_source"],
-            r["power_gen"],
-            r["major_complex"],
-            to_int(r["rig_count"]),
-            to_int(r["crane_count"]),
-            to_int(r["bed_count"]),
-            r["subdistrict"],
-            parse_date_mon_year(r["last_rev_date"]) if r["last_rev_date"] else None,
+            cid,                                       # complex_id
+            name2num.get(op_name.upper()) if op_name else None,  # company_num
+            s(r.get("LEASE_NUMBER")),                  # lease_number
+            s(r.get("AREA_CODE")),                     # area_code
+            s(r.get("BLOCK_NUMBER")),                  # block_number
+            s(r.get("FIELD_NAME_CODE")),               # field_name_code
+            s(r.get("DISTRICT_CODE")),                 # district_code
+            to_int(r.get("WATER_DEPTH")),              # water_depth
+            None,                                      # distance_to_shore (n/a)
+            None,                                      # oil_producing (derived later)
+            None,                                      # gas_producing (derived later)
+            None,                                      # water_producing (n/a)
+            None,                                      # condensate_producing (n/a)
+            None,                                      # drilling (n/a)
+            s(r.get("MANNED_24_HR_FL")),               # manned_24hr
+            s(r.get("ATTENDED_8_HR_FL")),              # attended_8hr
+            s(r.get("HELIPORT_FLAG")),                 # heliport
+            None,                                      # sulfur_producing (n/a)
+            None,                                      # compressor (n/a)
+            None,                                      # workover (n/a)
+            None,                                      # injection_code (n/a)
+            None,                                      # production_flag (n/a)
+            None,                                      # prod_equipment (n/a)
+            None,                                      # power_source (n/a)
+            None,                                      # power_gen (n/a)
+            s(r.get("MAJ_STRUC_FLAG")),                # major_complex
+            None,                                      # rig_count (n/a)
+            None,                                      # crane_count (n/a)
+            None,                                      # bed_count (n/a)
+            None,                                      # subdistrict_code (n/a)
+            parse_date_mdy(r.get("INSTALL_DATE")),     # last_revision_date (install proxy)
         ))
     conn.executemany(f"INSERT OR REPLACE INTO platforms VALUES ({','.join('?' * 31)})", data)
     print(f"  -> {len(data)} platforms loaded")
 
 
 def load_platform_structures(conn):
-    print("Loading platform structures (fixed-width)...")
-    spec = [
-        (1, 2, "area_code"),
-        (3, 6, "block_number"),
-        (9, 8, "complex_id"),
-        (17, 2, "deck_count"),
-        (19, 1, "ew_departure"),
-        (20, 11, "install_date"),
-        (31, 11, "last_revision"),
-        (42, 1, "major_structure"),
-        (43, 1, "ns_departure"),
-        (44, 11, "removal_date"),
-        (55, 3, "slant_slot_count"),
-        (58, 3, "slot_count"),
-        (61, 3, "slot_drill_count"),
-        (64, 3, "satellite_count"),
-        (67, 15, "structure_name"),
-        (82, 3, "structure_number"),
-        (85, 5, "structure_type"),
-        (90, 6, "ew_distance"),
-        (96, 6, "ns_distance"),
-        (102, 3, "underwater_count"),
-        (105, 16, "authority_type"),
-        (121, 8, "authority_number"),
-        (129, 20, "authority_status"),
-    ]
-    rows = parse_fixed_width(EXTRACTED_DIR / "platstru.DAT", spec)
+    print("Loading platform structures...")
+    # New format: PlatStrucRawData/mv_platstruc_structures.txt (per structure).
+    # Deck/slot/satellite/underwater counts and authority info are no longer in
+    # the bulk file and are left NULL.
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_platstruc_structures.txt")
     data = []
     for r in rows:
+        cid = s(r.get("COMPLEX_ID_NUM"))
+        if not cid:
+            continue
         data.append((
-            s(r["complex_id"]),
-            s(r["structure_number"]),
-            s(r["structure_name"]),
-            s(r["structure_type"]),
-            s(r["area_code"]),
-            s(r["block_number"]),
-            parse_date_mon_year(r["install_date"]) if r["install_date"] else parse_date_yyyymmdd(r["install_date"]),
-            parse_date_mon_year(r["removal_date"]) if r["removal_date"] else parse_date_yyyymmdd(r["removal_date"]),
-            to_int(r["deck_count"]),
-            to_int(r["slot_count"]),
-            to_int(r["slant_slot_count"]),
-            to_int(r["slot_drill_count"]),
-            to_int(r["satellite_count"]),
-            to_int(r["underwater_count"]),
-            r["major_structure"],
-            r["ns_departure"],
-            r["ew_departure"],
-            s(r["ns_distance"]),
-            s(r["ew_distance"]),
-            s(r["authority_type"]),
-            s(r["authority_number"]),
-            s(r["authority_status"]),
-            parse_date_mon_year(r["last_revision"]) if r["last_revision"] else None,
+            cid,                                       # complex_id
+            s(r.get("STRUCTURE_NUMBER")),              # structure_number
+            s(r.get("STRUCTURE_NAME")),                # structure_name
+            s(r.get("STRUC_TYPE_CODE")),               # structure_type
+            s(r.get("AREA_CODE")),                     # area_code
+            s(r.get("BLOCK_NUMBER")),                  # block_number
+            parse_date_mdy(r.get("INSTALL_DATE")),     # install_date
+            parse_date_mdy(r.get("REMOVAL_DATE")),     # removal_date
+            None,                                      # deck_count (n/a)
+            None,                                      # slot_count (n/a)
+            None,                                      # slant_slot_count (n/a)
+            None,                                      # slot_drill_count (n/a)
+            None,                                      # satellite_count (n/a)
+            None,                                      # underwater_count (n/a)
+            s(r.get("MAJ_STRUC_FLAG")),                # major_structure
+            s(r.get("SURF_N_S_CODE")),                 # ns_departure
+            s(r.get("SURF_E_W_CODE")),                 # ew_departure
+            s(r.get("SURF_N_S_DIST")),                 # ns_distance
+            s(r.get("SURF_E_W_DIST")),                 # ew_distance
+            None,                                      # authority_type (n/a)
+            None,                                      # authority_number (n/a)
+            None,                                      # authority_status (n/a)
+            None,                                      # last_revision_date (n/a)
         ))
     conn.executemany(f"INSERT OR REPLACE INTO platform_structures VALUES ({','.join('?' * 23)})", data)
     print(f"  -> {len(data)} platform structures loaded")
 
 
 def load_platform_locations(conn):
-    print("Loading platform locations (fixed-width)...")
-    spec = [
-        (1, 3, "district_code"),
-        (4, 8, "complex_id"),
-        (12, 3, "structure_number"),
-        (15, 2, "area_code"),
-        (17, 6, "block_number"),
-        (23, 15, "structure_name"),
-        (38, 6, "ns_distance"),
-        (44, 1, "ns_code"),
-        (45, 6, "ew_distance"),
-        (51, 1, "ew_code"),
-        (52, 17, "x_location"),
-        (69, 17, "y_location"),
-        (86, 14, "longitude"),
-        (100, 13, "latitude"),
-    ]
-    rows = parse_fixed_width(EXTRACTED_DIR / "platloc.DAT", spec)
+    print("Loading platform locations...")
+    # New format: PlatStrucRawData/mv_platstruc_structures.txt carries lat/long
+    # and X/Y per structure.
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_platstruc_structures.txt")
     data = []
     for r in rows:
+        cid = s(r.get("COMPLEX_ID_NUM"))
+        if not cid:
+            continue
         data.append((
-            s(r["complex_id"]),
-            s(r["structure_number"]),
-            s(r["district_code"]),
-            s(r["area_code"]),
-            s(r["block_number"]),
-            s(r["structure_name"]),
-            to_float(r["longitude"]),
-            to_float(r["latitude"]),
-            to_float(r["x_location"]),
-            to_float(r["y_location"]),
-            s(r["ns_distance"]),
-            r["ns_code"],
-            s(r["ew_distance"]),
-            r["ew_code"],
+            cid,                                       # complex_id
+            s(r.get("STRUCTURE_NUMBER")),              # structure_number
+            s(r.get("DISTRICT_CODE")),                 # district_code
+            s(r.get("AREA_CODE")),                     # area_code
+            s(r.get("BLOCK_NUMBER")),                  # block_number
+            s(r.get("STRUCTURE_NAME")),                # structure_name
+            to_float(r.get("LONGITUDE")),              # longitude
+            to_float(r.get("LATITUDE")),               # latitude
+            to_float(r.get("PTFRM_X_LOCATION")),       # x_location
+            to_float(r.get("PTFRM_Y_LOCATION")),       # y_location
+            s(r.get("SURF_N_S_DIST")),                 # ns_distance
+            s(r.get("SURF_N_S_CODE")),                 # ns_code
+            s(r.get("SURF_E_W_DIST")),                 # ew_distance
+            s(r.get("SURF_E_W_CODE")),                 # ew_code
         ))
     conn.executemany(f"INSERT OR REPLACE INTO platform_locations VALUES ({','.join('?' * 14)})", data)
     print(f"  -> {len(data)} platform locations loaded")
@@ -1580,7 +1555,13 @@ def load_platform_locations(conn):
 
 def load_platform_approvals(conn):
     print("Loading platform approvals...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "platformapprovalsdelimit.txt")
+    # No equivalent in BOEM's restructured bulk downloads (the old
+    # platform_approvals_delimit feed was retired). Skip if absent.
+    appr_path = EXTRACTED_DIR / "platformapprovalsdelimit.txt"
+    if not appr_path.exists():
+        print("  -> source retired by BOEM, skipping (table left empty)")
+        return
+    rows = parse_delimited_file(appr_path)
     data = []
     for r in rows:
         if len(r) < 10:
@@ -1610,7 +1591,14 @@ def load_platform_approvals(conn):
 
 def load_platform_removals(conn):
     print("Loading platform removals...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "platstruremdelimit.txt")
+    # No equivalent in BOEM's restructured bulk downloads (the old
+    # platform_removed_delimit feed was retired). Structure removal_date is still
+    # available in platform_structures. Skip if absent.
+    rem_path = EXTRACTED_DIR / "platstruremdelimit.txt"
+    if not rem_path.exists():
+        print("  -> source retired by BOEM, skipping (table left empty)")
+        return
+    rows = parse_delimited_file(rem_path)
     data = []
     for r in rows:
         if len(r) < 13:
@@ -1641,34 +1629,49 @@ def load_platform_removals(conn):
 
 def load_wells(conn):
     print("Loading wells/boreholes...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "5010.txt")
+    # New format: BoreholeRawData/mv_boreholes_all.txt (header row + quoted CSV).
+    # The new file exposes operator by NAME (COMPANY_NAME) not number; resolve
+    # back to MMS company number via the companies table. A few legacy columns
+    # (bottom_field_code, well_class, district_code, completion/plugback dates)
+    # have no equivalent in the new view and are left NULL.
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_boreholes_all.txt")
+    name2num = _company_name_to_num(conn)
+
+    def area_block(area, block):
+        a, b = s(area), s(block)
+        if a and b:
+            return f"{a} {b.strip()}"
+        return a or b
+
     data = []
     for r in rows:
-        if len(r) < 20:
+        api = s(r.get("API_WELL_NUMBER"))
+        if not api:
             continue
+        op_name = s(r.get("COMPANY_NAME"))
         data.append((
-            s(r[0]),             # api_well_number
-            s(r[1]),             # well_name
-            s(r[2]),             # well_name_suffix
-            s(r[3]),             # operator_num
-            s(r[4]),             # bottom_field_code
-            parse_date_yyyymmdd(r[5]),  # spud_date
-            s(r[6]),             # bottom_lease_number
-            to_int(r[7]),        # rkb_elevation
-            to_int(r[8]),        # total_measured_depth
-            to_int(r[9]),        # true_vertical_depth
-            to_int(r[19]) if len(r) > 19 else None,  # water_depth
-            to_float(r[20]) if len(r) > 20 else None,  # surface_longitude
-            to_float(r[21]) if len(r) > 21 else None,  # surface_latitude
-            to_float(r[22]) if len(r) > 22 else None,  # bottom_longitude
-            to_float(r[23]) if len(r) > 23 else None,  # bottom_latitude
-            s(r[16]) if len(r) > 16 else None,  # status_code
-            s(r[17]) if len(r) > 17 else None,  # type_code
-            s(r[18]) if len(r) > 18 else None,  # well_class
-            s(r[15]) if len(r) > 15 else None,  # district_code
-            s(r[11]) if len(r) > 11 else None,  # area_block
-            parse_date_yyyymmdd(r[14]) if len(r) > 14 else None,  # completion_date
-            parse_date_yyyymmdd(r[13]) if len(r) > 13 else None,  # plugback_date
+            api,                                          # api_well_number
+            s(r.get("WELL_NAME")),                        # well_name
+            s(r.get("WELL_NAME_SUFFIX")),                 # well_name_suffix
+            name2num.get(op_name.upper()) if op_name else None,  # operator_num
+            None,                                         # bottom_field_code (n/a)
+            parse_date_mdy(r.get("WELL_SPUD_DATE")),      # spud_date
+            s(r.get("BOTM_LEASE_NUMBER")),                # bottom_lease_number
+            to_int(r.get("RKB_ELEVATION")),               # rkb_elevation
+            to_int(r.get("BH_TOTAL_MD")),                 # total_measured_depth
+            to_int(r.get("WELL_BORE_TVD")),               # true_vertical_depth
+            to_int(r.get("WATER_DEPTH")),                 # water_depth
+            to_float(r.get("SURF_LONGITUDE")),            # surface_longitude
+            to_float(r.get("SURF_LATITUDE")),             # surface_latitude
+            to_float(r.get("BOTM_LONGITUDE")),            # bottom_longitude
+            to_float(r.get("BOTM_LATITUDE")),             # bottom_latitude
+            s(r.get("BOREHOLE_STAT_CD")),                 # status_code
+            s(r.get("WELL_TYPE_CODE")),                   # type_code
+            None,                                         # well_class (n/a)
+            None,                                         # district_code (n/a)
+            area_block(r.get("BOTM_AREA_CODE"), r.get("BOTM_BLOCK_NUMBER")),  # area_block
+            None,                                         # completion_date (n/a)
+            None,                                         # plugback_date (n/a)
         ))
     conn.executemany(f"INSERT OR REPLACE INTO wells VALUES ({','.join('?' * 22)})", data)
     print(f"  -> {len(data)} wells loaded")
@@ -1932,54 +1935,59 @@ def load_apm(conn):
 
 def load_pipelines(conn):
     print("Loading pipeline masters...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "pplmastdelimit.txt")
+    # New format: PipePermRawData/mv_pipeperm_segments.txt. Several legacy columns
+    # (boarding SDV/FSV, buried flag, cathodic life, construction/leak/hydrotest
+    # detail, recv_*, system_code, row_permittee, protraction) have no equivalent
+    # in the new view and are left NULL.
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_pipeperm_segments.txt")
     data = []
     for r in rows:
-        if len(r) < 20:
+        seg = s(r.get("SEGMENT_NUM"))
+        if not seg:
             continue
         data.append((
-            s(r[0]),              # segment_num
-            to_float(r[1]),       # segment_length
-            s(r[2]),              # origin_name
-            s(r[3]),              # origin_area
-            s(r[4]),              # origin_block
-            s(r[5]),              # origin_lease
-            s(r[6]) if len(r) > 6 else None,   # dest_name (auth_code in some layouts)
-            s(r[7]) if len(r) > 7 else None,   # dest_area
-            s(r[8]) if len(r) > 8 else None,   # dest_block
-            s(r[9]) if len(r) > 9 else None,   # dest_lease
-            parse_date_yyyymmdd(r[10]) if len(r) > 10 else None,  # abandon_approval
-            parse_date_yyyymmdd(r[11]) if len(r) > 11 else None,  # abandon_date
-            parse_date_yyyymmdd(r[12]) if len(r) > 12 else None,  # approved_date
-            s(r[13]) if len(r) > 13 else None,  # auth_code
-            s(r[14]) if len(r) > 14 else None,  # boarding_sdv
-            s(r[15]) if len(r) > 15 else None,  # buried_flag
-            to_int(r[16]) if len(r) > 16 else None,  # cathodic_life
-            s(r[17]) if len(r) > 17 else None,
-            parse_date_yyyymmdd(r[18]) if len(r) > 18 else None,
-            s(r[19]) if len(r) > 19 else None,
-            parse_date_yyyymmdd(r[20]) if len(r) > 20 else None,  # last_revision
-            parse_date_yyyymmdd(r[21]) if len(r) > 21 else None,  # hydrotest
-            to_float(r[22]) if len(r) > 22 else None,  # fed_state_length
-            s(r[23]) if len(r) > 23 else None,  # status_code
-            s(r[24]) if len(r) > 24 else None,  # pipe_size
-            s(r[25]) if len(r) > 25 else None,  # row_number
-            to_float(r[26]) if len(r) > 26 else None,
-            s(r[27]) if len(r) > 27 else None,
-            parse_date_yyyymmdd(r[28]) if len(r) > 28 else None,
-            s(r[29]) if len(r) > 29 else None,  # product_code
-            s(r[30]) if len(r) > 30 else None,
-            s(r[31]) if len(r) > 31 else None,
-            s(r[32]) if len(r) > 32 else None,
-            to_int(r[33]) if len(r) > 33 else None,
-            to_int(r[34]) if len(r) > 34 else None,
-            s(r[35]) if len(r) > 35 else None,
-            to_float(r[36]) if len(r) > 36 else None,
-            s(r[37]) if len(r) > 37 else None,
-            s(r[38]) if len(r) > 38 else None,
-            s(r[39]) if len(r) > 39 else None,
-            s(r[40]) if len(r) > 40 else None,
-            s(r[41]) if len(r) > 41 else None,
+            seg,                                       # segment_num
+            to_float(r.get("SEG_LENGTH")),             # segment_length
+            s(r.get("ORIG_ID_NAME")),                  # origin_name
+            s(r.get("ORIG_AR_CODE")),                  # origin_area
+            s(r.get("ORIG_BLK_NUM")),                  # origin_block
+            s(r.get("ORIG_LSE_NUM")),                  # origin_lease
+            s(r.get("DEST_ID_NAME")),                  # dest_name
+            s(r.get("DEST_AR_CODE")),                  # dest_area
+            s(r.get("DEST_BLK_NUM")),                  # dest_block
+            s(r.get("DEST_LSE_NUM")),                  # dest_lease
+            parse_date_mdy(r.get("ABAN_APROV_DT")),    # abandon_approval
+            parse_date_mdy(r.get("ABAN_DATE")),        # abandon_date
+            parse_date_mdy(r.get("APPROVED_DATE")),    # approved_date
+            s(r.get("AUTHCODE")),                      # auth_code
+            None,                                      # boarding_sdv (n/a)
+            None,                                      # buried_flag (n/a)
+            None,                                      # cathodic_life (n/a)
+            None,                                      # flow_direction (n/a)
+            None,                                      # construction_date (n/a)
+            None,                                      # leak_detection (n/a)
+            None,                                      # last_revision (n/a)
+            parse_date_mdy(r.get("INIT_HS_DT")),       # hydrotest_date
+            None,                                      # fed_state_length (n/a)
+            s(r.get("STATUS_CODE")),                   # status_code
+            s(r.get("PPL_SIZE_CODE")),                 # pipe_size
+            s(r.get("ROW_NUMBER")),                    # row_number
+            None,                                      # recv_maop (n/a)
+            None,                                      # recv_segment (n/a)
+            None,                                      # proposed_const_date (n/a)
+            s(r.get("PROD_CODE")),                     # product_code
+            None,                                      # system_code (n/a)
+            None,                                      # row_permittee (n/a)
+            s(r.get("FACIL_OPERATOR_NAME")),           # facility_operator
+            None,                                      # min_water_depth (n/a)
+            to_int(r.get("MAX_WTR_DPTH")),             # max_water_depth
+            None,                                      # protraction_number (n/a)
+            to_float(r.get("MAOP_PRSS")),              # maop_pressure
+            s(r.get("CATHODIC_CODE")),                 # cathodic_code
+            s(r.get("BIDIR_FLAG")),                    # bidirectional
+            None,                                      # boarding_fsv (n/a)
+            None,                                      # approval_code (n/a)
+            None,                                      # abandon_type (n/a)
         ))
     conn.executemany(f"INSERT OR REPLACE INTO pipelines VALUES ({','.join('?' * 42)})", data)
     print(f"  -> {len(data)} pipelines loaded")
@@ -1987,30 +1995,70 @@ def load_pipelines(conn):
 
 def load_pipeline_locations(conn):
     print("Loading pipeline locations...")
-    rows = parse_delimited_file(EXTRACTED_DIR / "localldelimit.txt")
+    # New format: PipeLocRawData/mv_pipelinelocation.txt (~1.9M points). Unlike
+    # the old single-survey file, this bundles MULTIPLE as-built surveys per
+    # segment, each reusing point sequence numbers (1..N). Loading them all
+    # collapses on the (segment_num, point_seq) PK and mixes versions, garbling
+    # the route. So we keep only each segment's most recent as-built version
+    # (by VERSION_DATE, falling back to LAST_REV_DATE) — the current geometry.
+    rows = parse_delimited_with_header(EXTRACTED_DIR / "mv_pipelinelocation.txt")
+
+    def ver_key(r):
+        return (parse_date_mdy(r.get("VERSION_DATE")) or "",
+                parse_date_mdy(r.get("LAST_REV_DATE")) or "")
+
+    latest = {}  # segment_num -> best version key
+    for r in rows:
+        seg = s(r.get("SEGMENT_NUM"))
+        if not seg:
+            continue
+        k = ver_key(r)
+        if seg not in latest or k > latest[seg]:
+            latest[seg] = k
+
     data = []
     for r in rows:
-        if len(r) < 10:
+        seg = s(r.get("SEGMENT_NUM"))
+        if not seg or ver_key(r) != latest.get(seg):
             continue
         data.append((
-            s(r[0]),              # segment_num
-            to_int(r[1]),         # point_seq
-            to_float(r[2]),       # latitude
-            to_float(r[3]),       # longitude
-            s(r[4]),              # nad_year
-            s(r[5]),              # proj_code
-            to_float(r[6]),       # x_coord
-            to_float(r[7]),       # y_coord
-            parse_date_yyyymmdd(r[8]),   # last_revision
-            parse_date_yyyymmdd(r[9]),   # version_date
-            s(r[10]) if len(r) > 10 else None,  # asbuilt_flag
+            seg,                                       # segment_num
+            to_int(r.get("ASBUILT_SEQ_NUM")),          # point_seq
+            to_float(r.get("LATITUDE")),               # latitude
+            to_float(r.get("LONGITUDE")),              # longitude
+            s(r.get("NAD_YEAR_CD")),                   # nad_year
+            s(r.get("PROJ_CODE")),                     # proj_code
+            to_float(r.get("X_COORD_LOC")),            # x_coord
+            to_float(r.get("Y_COORD_LOC")),            # y_coord
+            parse_date_mdy(r.get("LAST_REV_DATE")),    # last_revision
+            parse_date_mdy(r.get("VERSION_DATE")),     # version_date
+            s(r.get("ASBUILT_FLAG")),                  # asbuilt_flag
         ))
     conn.executemany(f"INSERT OR REPLACE INTO pipeline_locations VALUES ({','.join('?' * 11)})", data)
-    print(f"  -> {len(data)} pipeline location points loaded")
+    print(f"  -> {len(data)} pipeline location points loaded (latest as-built per segment)")
+
+
+def _extract_ogora_txt(zf):
+    """Extract an OGOR-A zip and return the path of its delimited .txt file.
+
+    The inner filename varies (ogora<year>delimit.txt for past years,
+    ogoradelimit.txt for the current year, and BSEE renames it when the year
+    rolls over), so trust the zip's own member list instead of guessing —
+    guessing can also pick up a stale file left in extracted/ by another year.
+    Returns None if the zip contains no .txt member.
+    """
+    with zipfile.ZipFile(zf, "r") as z:
+        z.extractall(EXTRACTED_DIR)
+        for member in z.namelist():
+            if member.lower().endswith(".txt"):
+                path = EXTRACTED_DIR / member
+                if path.exists():
+                    return path
+    return None
 
 
 def load_production(conn):
-    """Load all OGOR-A production files (1996-2025)."""
+    """Load all OGOR-A production files (1996-present)."""
     print("Loading OGOR-A production data...")
     total = 0
 
@@ -2022,25 +2070,15 @@ def load_production(conn):
             continue
         year = year_match.group(1)
 
-        # Extract to get the txt file
-        with zipfile.ZipFile(zf, "r") as z:
-            z.extractall(EXTRACTED_DIR)
+        # The current year's OGOR-A file may not be published yet — BSEE then
+        # serves an HTML page instead of a zip. Skip anything that isn't a zip.
+        if not zipfile.is_zipfile(zf):
+            print(f"  {year} not available yet (not a valid zip) — skipping")
+            continue
 
-        # Find the extracted file
-        if year == "2025":
-            txt_name = "ogoradelimit.txt"
-        else:
-            txt_name = f"ogora{year}delimit.txt"
-
-        txt_path = EXTRACTED_DIR / txt_name
-        if not txt_path.exists():
-            # Try alternate name
-            for candidate in EXTRACTED_DIR.glob(f"ogora*{year}*delimit*"):
-                txt_path = candidate
-                break
-
-        if not txt_path.exists():
-            print(f"  WARNING: Could not find extracted file for {year}")
+        txt_path = _extract_ogora_txt(zf)
+        if txt_path is None:
+            print(f"  WARNING: no .txt data file inside {zf.name} — skipping")
             continue
 
         print(f"  Processing {year}...", end=" ")
@@ -2228,33 +2266,17 @@ def load_production_incremental(conn):
             total_skipped += 1
             continue
 
-        # Extract this year's zip
-        with zipfile.ZipFile(zf, "r") as z:
-            z.extractall(EXTRACTED_DIR)
+        # Skip the current-year file if it isn't published yet (HTML, not a zip).
+        if not zipfile.is_zipfile(zf):
+            print(f"  {year} not available yet (not a valid zip) — skipping")
+            continue
 
-        # Find extracted file
-        if year == "2025":
-            txt_name = "ogoradelimit.txt"
-        else:
-            txt_name = f"ogora{year}delimit.txt"
-
-        txt_path = EXTRACTED_DIR / txt_name
-        if not txt_path.exists():
-            for candidate in EXTRACTED_DIR.glob(f"ogora*{year}*delimit*"):
-                txt_path = candidate
-                break
-
-        if not txt_path.exists():
-            print(f"  WARNING: Could not find extracted file for {year}")
+        txt_path = _extract_ogora_txt(zf)
+        if txt_path is None:
+            print(f"  WARNING: no .txt data file inside {zf.name} — skipping")
             continue
 
         print(f"  Processing {year}...", end=" ")
-
-        # Delete old data for this year before inserting
-        conn.execute(
-            "DELETE FROM production WHERE production_date LIKE ?",
-            (f"{year}%",),
-        )
 
         rows = parse_delimited_file(txt_path)
         data = []
@@ -2282,6 +2304,16 @@ def load_production_incremental(conn):
                 s(r[17]) if len(r) > 17 else None,
                 s(r[18]) if len(r) > 18 else None,
             ))
+        if not data:
+            print(f"WARNING: parsed 0 records — keeping existing {year} data")
+            continue
+
+        # Replace this year's rows only now that the new file parsed cleanly —
+        # deleting first would lose the year entirely on a bad/truncated file.
+        conn.execute(
+            "DELETE FROM production WHERE production_date LIKE ?",
+            (f"{year}%",),
+        )
         conn.executemany(f"INSERT INTO production VALUES ({','.join('?' * 19)})", data)
         mark_built(conn, meta_key, checksum)
         conn.commit()
@@ -2628,6 +2660,35 @@ def load_production_by_platform(conn):
     print(f"  {len(data):,} records")
 
 
+def enrich_platform_producing(conn):
+    """Derive platforms.oil_producing / gas_producing from production_by_platform.
+
+    BOEM's restructured platform file no longer carries producing flags, but the
+    BSEE production-by-platform feed does. Mark a complex as oil/gas producing if
+    its record in the most recent available production month shows positive
+    oil/gas rates. Keeps the dashboard's "producing platforms" count meaningful.
+    """
+    row = conn.execute("SELECT MAX(production_date) FROM production_by_platform").fetchone()
+    if not row or not row[0]:
+        print("  -> no production_by_platform data; skipping producing-flag enrichment")
+        return
+    # "Currently producing" = produced within the last 12 months of available
+    # data. A single-month snapshot understates this because the most recent
+    # month is sparsely reported; a trailing window absorbs that lag. (BOEM's
+    # old static oil_prod/gas_prod structural flags are no longer published.)
+    oil = [(str(r[0]),) for r in conn.execute(
+        "SELECT DISTINCT complex_id_num FROM production_by_platform "
+        "WHERE production_date >= date((SELECT MAX(production_date) FROM production_by_platform), '-12 months') "
+        "AND bopd > 0")]
+    gas = [(str(r[0]),) for r in conn.execute(
+        "SELECT DISTINCT complex_id_num FROM production_by_platform "
+        "WHERE production_date >= date((SELECT MAX(production_date) FROM production_by_platform), '-12 months') "
+        "AND mcfpd > 0")]
+    conn.executemany("UPDATE platforms SET oil_producing = 'Y' WHERE complex_id = ?", oil)
+    conn.executemany("UPDATE platforms SET gas_producing = 'Y' WHERE complex_id = ?", gas)
+    print(f"  -> producing flags set (last 12mo): {len(oil)} oil, {len(gas)} gas")
+
+
 # Map each loader to its source zip file(s) and the tables it populates.
 # Format: (meta_key, zip_filenames, loader_fn, tables_to_clear)
 LOADER_MAP = [
@@ -2638,12 +2699,16 @@ LOADER_MAP = [
     ("field_production", ["field_production_delimit.zip"],   load_field_production,   ["field_production"]),
     ("appendices",       ["appendix_a_delimit.zip", "appendix_b_delimit.zip", "appendix_c_delimit.zip"],
                                                              load_appendices,         ["area_block_to_field", "lease_to_field", "operator_to_field"]),
-    ("leases",           ["lease_data_fixed.zip"],           load_leases,             ["leases"]),
+    # leases pulls financials from the serial-register zip and area/block/expiry
+    # from the lease-area-block zip, so it depends on both.
+    ("leases",           ["lease_data_fixed.zip", "lease_list_fixed.zip"], load_leases, ["leases"]),
     ("lease_list",       ["lease_list_fixed.zip"],           load_lease_list,         ["lease_list"]),
     ("lease_owners",     ["lease_owner_op_delimit.zip"],     load_lease_owners,       ["lease_owners"]),
+    # platforms, structures and locations all derive from the one PlatStruc zip
+    # (downloaded under the legacy local name platform_master_fixed.zip).
     ("platforms",        ["platform_master_fixed.zip"],      load_platforms,          ["platforms"]),
-    ("platform_structs", ["platform_structure_fixed.zip"],   load_platform_structures,["platform_structures"]),
-    ("platform_locs",    ["platform_location_fixed.zip"],    load_platform_locations, ["platform_locations"]),
+    ("platform_structs", ["platform_master_fixed.zip"],      load_platform_structures,["platform_structures"]),
+    ("platform_locs",    ["platform_master_fixed.zip"],      load_platform_locations, ["platform_locations"]),
     ("platform_approvals",["platform_approvals_delimit.zip"],load_platform_approvals,["platform_approvals"]),
     ("platform_removals",["platform_removed_delimit.zip"],   load_platform_removals,  ["platform_removals"]),
     ("wells",            ["borehole_delimit.zip"],           load_wells,              ["wells"]),
@@ -2695,6 +2760,7 @@ def main():
 
         skipped = 0
         loaded = 0
+        failed = 0
 
         for meta_key, zip_names, loader_fn, tables in LOADER_MAP:
             zip_paths = [RAW_DIR / z for z in zip_names]
@@ -2709,6 +2775,21 @@ def main():
                 conn.execute(f'DELETE FROM "{table}"')
 
             loader_fn(conn)
+
+            # A loader whose source file is missing/renamed returns without
+            # inserting anything. Marking it built anyway would persist the
+            # DELETEs above and silently serve empty tables until the source
+            # checksum next changes — roll back and retry on the next run.
+            if all(
+                conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] == 0
+                for t in tables
+            ):
+                conn.rollback()
+                print(f"  WARNING: {meta_key} loaded 0 rows — "
+                      f"keeping previous data, will retry next run")
+                failed += 1
+                continue
+
             if checksum:
                 mark_built(conn, meta_key, checksum)
             conn.commit()
@@ -2722,12 +2803,20 @@ def main():
         else:
             load_production_incremental(conn)
 
+        # Derive platform producing flags from production-by-platform data
+        # (the restructured BOEM platform file no longer ships these flags).
+        enrich_platform_producing(conn)
+        conn.commit()
+
         # Create views (always — they're cheap)
         create_views(conn)
         conn.commit()
 
         if not full_rebuild:
-            print(f"\n  {loaded} data sources reloaded, {skipped} unchanged (skipped)")
+            print(f"\n  {loaded} data sources reloaded, {skipped} unchanged (skipped)"
+                  + (f", {failed} FAILED (kept previous data)" if failed else ""))
+        elif failed:
+            print(f"\n  WARNING: {failed} data sources loaded 0 rows")
 
         # Print summary
         print_summary(conn)

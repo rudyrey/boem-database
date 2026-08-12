@@ -70,9 +70,21 @@ function buildCache() {
   // Filter options (distinct values for dropdowns)
   cache.filterOptions = {
     wellStatus: db.prepare('SELECT DISTINCT status_code FROM wells WHERE status_code IS NOT NULL ORDER BY status_code').all().map(r => r.status_code),
-    wellStatusLabels: { C: 'Completed', D: 'Drilling', E: 'Plugged & Abandoned', O: 'Active/Producing', R: 'Relinquished' },
+    // BOREHOLE_STAT_CD values per BSEE's own lookup (mv_apm_borehole_stat_codes.txt),
+    // plus the eWell lifecycle codes (APD/AST/DRL/CNL) that file omits.
+    // Keep in sync with wellStatusBadge in public/js/core/utils.js.
+    wellStatusLabels: {
+      APD: 'Approved Permit', AST: 'Approved Sidetrack', BP: 'Borehole Bypassed',
+      CNL: 'Cancelled', COM: 'Borehole Completed', DRL: 'Drilling',
+      DSI: 'Drilling Suspended', PA: 'Permanently Abandoned',
+      ST: 'Borehole Sidetracked', TA: 'Temporarily Abandoned', VCW: 'Volume Chamber Well',
+    },
     wellType: db.prepare('SELECT DISTINCT type_code FROM wells WHERE type_code IS NOT NULL ORDER BY type_code').all().map(r => r.type_code),
-    wellTypeLabels: { '01': 'Development', '02': 'Exploratory', '03': 'Dev. Sidetrack', '04': 'Expl. Sidetrack', '05': 'Other/Workover' },
+    // WELL_TYPE_CODE values per BSEE's lookup (mv_apm_well_type_codes.txt)
+    wellTypeLabels: {
+      C: 'Core Test', D: 'Development', E: 'Exploratory', N: 'Non-Operation',
+      O: 'Other', R: 'Relief', S: 'Strat Test',
+    },
     leaseStatus: db.prepare('SELECT DISTINCT lease_status FROM leases WHERE lease_status IS NOT NULL ORDER BY lease_status').all().map(r => r.lease_status),
     pipelineStatus: db.prepare('SELECT DISTINCT status_code FROM pipelines WHERE status_code IS NOT NULL ORDER BY status_code').all().map(r => r.status_code),
     pipelineProduct: db.prepare('SELECT DISTINCT product_code FROM pipelines WHERE product_code IS NOT NULL ORDER BY product_code').all().map(r => r.product_code),

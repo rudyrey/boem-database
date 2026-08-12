@@ -30,7 +30,11 @@ export class WellLayer {
       const markers = [];
       for (const w of res.data) {
         if (!w.lat || !w.lng) continue;
-        const colors = { C: '#27ae60', D: '#3498db', O: '#27ae60', R: '#c0392b', E: '#95a5a6' };
+        // BOREHOLE_STAT_CD values — same vocabulary as wellStatusBadge in core/utils.js
+        const colors = {
+          COM: '#27ae60', DRL: '#3498db', PA: '#c0392b', TA: '#e67e22',
+          ST: '#2980b9', DSI: '#f39c12', CNL: '#95a5a6', BP: '#95a5a6',
+        };
         const color = colors[w.status_code] || '#f1c40f';
 
         const marker = L.circleMarker([w.lat, w.lng], {
